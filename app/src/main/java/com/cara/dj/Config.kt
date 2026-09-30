@@ -1,0 +1,73 @@
+package com.cara.dj
+
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
+import kotlin.reflect.KProperty
+
+/** One saved setting: reads/writes the phone's storage and tells the screen when it changes. */
+class SP<T : Any>(private val key: String, private val def: T) {
+    private var st: MutableState<T>? = null
+
+    @Suppress("UNCHECKED_CAST")
+    private fun state(): MutableState<T> {
+        st?.let { return it }
+        val sp = Config.prefs
+        val v: Any = when (def) {
+            is String -> sp.getString(key, def) ?: def
+            is Int -> sp.getInt(key, def)
+            is Float -> sp.getFloat(key, def)
+            is Double -> java.lang.Double.longBitsToDouble(sp.getLong(key, java.lang.Double.doubleToRawLongBits(def)))
+            else -> def
+        }
+        val s = mutableStateOf(v as T)
+        st = s
+        return s
+    }
+
+    operator fun getValue(thisRef: Any?, prop: KProperty<*>): T = state().value
+
+    operator fun setValue(thisRef: Any?, prop: KProperty<*>, v: T) {
+        state().value = v
+        val e = Config.prefs.edit()
+        when (v) {
+            is String -> e.putString(key, v)
+            is Int -> e.putInt(key, v)
+            is Float -> e.putFloat(key, v)
+            is Double -> e.putLong(key, java.lang.Double.doubleToRawLongBits(v))
+            else -> {}
+        }
+        e.apply()
+    }
+}
+
+/** All your settings, saved on the phone. */
+object Config {
+    lateinit var prefs: SharedPreferences
+
+    fun init(ctx: Context) {
+        if (!this::prefs.isInitialized) prefs = ctx.applicationContext.getSharedPreferences("cara", Context.MODE_PRIVATE)
+    }
+
+    var clientID: String by SP("clientID", "")
+    var elevenKey: String by SP("elevenKey", "")
+    var elevenVoice: String by SP("elevenVoice", "")
+    var elevenModel: String by SP("elevenModel", "eleven_v4")
+    var geminiKey: String by SP("geminiKey", "")
+    var city: String by SP("city", "Yakima, Washington")
+    var lat: Double by SP("lat", 46.60)
+    var lon: Double by SP("lon", -120.51)
+    var breakMin: Int by SP("breakMin", 2)
+    var breakMax: Int by SP("breakMax", 5)
+    var mood: String by SP("mood", "normal")
+    var djVolume: Float by SP("djVolume", 100f)
+    var stingerVolume: Float by SP("stingerVolume", 80f)
+    var stingerChance: Int by SP("stingerChance", 50)
+
+    // Spotify login (saved so you only log in once)
+    var accessToken: String by SP("accessToken", "")
+    var refreshToken: String by SP("refreshToken", "")
+    var tokenExpiry: Double by SP("tokenExpiry", 0.0)
+    var verifier: String by SP("verifier", "")
+}
