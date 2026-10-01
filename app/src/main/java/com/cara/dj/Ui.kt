@@ -323,11 +323,11 @@ private fun MainScreen(art: Bitmap?, onSettings: () -> Unit) {
             shareCtx.startActivity(android.content.Intent.createChooser(i, null))
         }
     }
-    val miniOn = listState.firstVisibleItemIndex >= 1 || listState.firstVisibleItemScrollOffset > with(density) { pageH.toPx() } * 0.8f
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
     val pageH = maxHeight - (84.dp + navPad)
     val pagePx = with(density) { pageH.toPx() }
+    val miniOn = listState.firstVisibleItemIndex >= 1 || listState.firstVisibleItemScrollOffset > pagePx * 0.8f
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
       item {
         Column(Modifier.fillMaxWidth().height(pageH).statusBarsPadding()) {
