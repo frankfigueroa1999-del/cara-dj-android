@@ -16,6 +16,7 @@ class SP<T : Any>(private val key: String, private val def: T) {
         val sp = Config.prefs
         val v: Any = when (def) {
             is String -> sp.getString(key, def) ?: def
+            is Boolean -> sp.getBoolean(key, def)
             is Int -> sp.getInt(key, def)
             is Float -> sp.getFloat(key, def)
             is Double -> java.lang.Double.longBitsToDouble(sp.getLong(key, java.lang.Double.doubleToRawLongBits(def)))
@@ -33,6 +34,7 @@ class SP<T : Any>(private val key: String, private val def: T) {
         val e = Config.prefs.edit()
         when (v) {
             is String -> e.putString(key, v)
+            is Boolean -> e.putBoolean(key, v)
             is Int -> e.putInt(key, v)
             is Float -> e.putFloat(key, v)
             is Double -> e.putLong(key, java.lang.Double.doubleToRawLongBits(v))
@@ -64,6 +66,10 @@ object Config {
     var djVolume: Float by SP("djVolume", 100f)
     var stingerVolume: Float by SP("stingerVolume", 80f)
     var stingerChance: Int by SP("stingerChance", 50)
+    var popinEnabled: Boolean by SP("popinEnabled", true)
+    var popinChance: Int by SP("popinChance", 35)
+    var popinSeconds: Int by SP("popinSeconds", 15)
+    var popinTest: Boolean by SP("popinTest", false)
 
     // Spotify login (saved so you only log in once)
     var accessToken: String by SP("accessToken", "")

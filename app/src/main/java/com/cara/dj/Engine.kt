@@ -46,6 +46,15 @@ object Engine {
     private var forceBreak = false
     private var lastSting = -1
 
+    // pop-in: a quick second drop-in a few seconds into the song after a talk-over / intro break
+    private var popinArmed = false
+    private var popinUri: String? = null
+    private var popinAt = 0
+    private var popinFile: File? = null
+    private var popinBuilding = false
+    private var popinForce = false
+    private var popinTestNow = false
+
     fun init(ctx: Context) {
         if (inited) return
         inited = true
@@ -70,7 +79,16 @@ object Engine {
             }
             val p = Spotify.poll()
             if (p != null) { now = p; connected = true; addLog("Connected to Spotify.") }
-            else { connected = false; addLog("Logged in, but couldn't read playback. Play something in the Spotify app.") }
+            else {
+                connected = false
+                when (Spotify.lastStatus) {
+                    403 -> addLog("Spotify refused this account (error 403). Spotify apps in development mode only work for accounts added under User Management in the developer dashboard. Add your Spotify email there (or use your own Client ID in Settings), then log out and back in.")
+                    401 -> addLog("Spotify login expired or was rejected (error 401). Open Settings, log out of Spotify, and connect again.")
+                    429 -> addLog("Spotify says slow down (error 429). Wait a minute and try again.")
+                    0 -> addLog("Couldn't reach Spotify. Check the internet connection.")
+                    else -> addLog("Couldn't read playback (Spotify error ${Spotify.lastStatus}). Play something in the Spotify app, then try again.")
+                }
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             connected = false
@@ -102,7 +120,7 @@ object Engine {
                     val p = Spotify.poll()
                     if (p != null) { now = p; connected = true }
                 }
-                delay(4000)
+                delay(12000)
             }
         }
     }
@@ -113,6 +131,7 @@ object Engine {
         if (running) return
         running = true
         songsSince = 0; lastUri = ""; prepared = null; lastStyle = null; queued = null
+        dropPopin()
         nextAfter = rollInterval()
         try { ContextCompat.startForegroundService(app, Intent(app, DjService::class.java)) } catch (e: Exception) { addLog("Couldn't start background mode: ${e.message}") }
         addLog("DJ is live. You can lock the screen: it keeps working in the background.")
@@ -129,6 +148,7 @@ object Engine {
         loop?.cancel(); loop = null
         prepared?.file?.delete()
         prepared = null
+        dropPopin()
         try { app.stopService(Intent(app, DjService::class.java)) } catch (e: Exception) { }
         addLog("DJ stopped.")
     }
@@ -153,6 +173,11 @@ object Engine {
         forceBreak = true
     }
 
+    fun testPopin() {
+        if (!running || !now.isPlaying) { addLog("Start the DJ and play a song first."); return }
+        popinTestNow = true
+    }
+
     suspend fun testStinger() {
         val s = pickStinger()
         if (s == null) { addLog("No stingers found in the app."); return }
@@ -169,17 +194,35 @@ object Engine {
         return all[i]
     }
 
+    private var lastOfflineLog = 0L
+    private var buildRetryAt = 0L
+
     private suspend fun tick() {
         if (busy) return
         val remainingEst = now.remainingMs
-        val near = remainingEst != Int.MAX_VALUE && (remainingEst < 15000 || prepared?.style == "intro")
-        val interval = if (near) 900L else 2500L
+        val near = remainingEst != Int.MAX_VALUE && (remainingEst < 12000 || prepared?.style == "intro")
+        val interval = if (near) 1200L else 6000L
         if (System.currentTimeMillis() - lastPoll >= interval) {
             lastPoll = System.currentTimeMillis()
-            val p = Spotify.poll() ?: return
-            now = p
-            connected = true
-            if (p.hasItem && p.uri != lastUri) { lastUri = p.uri; songsSince += 1 }
+            val p = Spotify.poll()
+            if (p != null) {
+                now = p
+                connected = true
+                if (p.hasItem && p.uri != lastUri) {
+                    lastUri = p.uri
+                    songsSince += 1
+                    if (popinFile != null && popinUri != p.uri && !popinForce) dropPopin()
+                    if (popinArmed) {
+                        popinArmed = false
+                        if (Config.popinEnabled && !popinBuilding && popinFile == null) planPopin(p.track, p.uri, p.durationMs)
+                        else addLog("[pop-in skipped: " + (if (Config.popinEnabled) "still busy with the last one" else "turned off") + "]")
+                    }
+                }
+            } else {
+                // can't reach Spotify for a moment (busy, rate limit, bad signal): carry on with our own clock so the break isn't missed
+                if (!(running && now.isPlaying && now.hasItem && now.remainingMs > -2000)) return
+                if (System.currentTimeMillis() - lastOfflineLog > 30000) { lastOfflineLog = System.currentTimeMillis(); addLog("Spotify isn't answering, using my own clock for now.") }
+            }
         }
         if (!running || !now.isPlaying || !now.hasItem) return
         val remaining = now.remainingMs
@@ -200,7 +243,29 @@ object Engine {
             return
         }
 
-        if (due && prepared == null && !building && (remaining < 45000 || forced != null)) {
+        // test button: make a pop-in for the current song and play it as soon as it is ready
+        if (popinTestNow && !popinBuilding && popinFile == null) {
+            popinTestNow = false
+            addLog("Testing pop-in...")
+            popinUri = now.uri; popinAt = 0; popinForce = true
+            val t = now.track
+            val u = now.uri
+            scope.launch { buildPopin(t, u) }
+        }
+
+        // pop-in: once its clip is ready and we are a few seconds into the song, and a break isn't about to start
+        val pf = popinFile
+        if (pf != null) {
+            if (popinForce || (now.uri == popinUri && progress >= popinAt && remaining > 25000)) {
+                popinFile = null; popinUri = null; popinForce = false
+                addLog("[pop-in]")
+                playPopin(pf)
+                return
+            }
+            if (now.uri != popinUri) dropPopin()
+        }
+
+        if (due && prepared == null && !building && System.currentTimeMillis() >= buildRetryAt && (remaining < 150000 || forced != null)) {
             val style = forced ?: pickStyle()
             val uri = now.uri
             scope.launch { buildBreak(style, uri, immediate = false) }
@@ -209,19 +274,34 @@ object Engine {
         val p = prepared
         if (due && p != null) {
             val go = when (p.style) {
-                "silent" -> now.uri == p.forUri && remaining <= p.pauseMs
-                "talkover" -> now.uri == p.forUri && remaining <= p.talkMs
+                "silent" -> if (now.uri == p.forUri) remaining <= p.pauseMs else progress >= 1200
+                // if the clip finished after its song ended, talk over the start of the next song instead of losing the break
+                "talkover" -> if (now.uri == p.forUri) remaining <= p.talkMs else progress >= 1200
                 else -> now.uri != p.forUri && progress >= p.introAtMs
             }
             if (go) {
+                val late = (p.style == "talkover" || p.style == "silent") && now.uri != p.forUri
                 prepared = null
                 songsSince = 0
                 lastStyle = p.style
                 queued = null
                 nextAfter = rollInterval()
-                addLog("[transition: ${p.style}]")
-                perform(p)
-            } else if (p.style != "intro" && now.uri != p.forUri) {
+                addLog(if (late) "[transition: talkover (late, over the start of this song)]" else "[transition: ${p.style}]")
+                if (Config.popinEnabled && (p.style != "silent" || late)) {
+                    if (Config.popinTest || randInt(0, 99) < Config.popinChance) {
+                        if (late || p.style == "intro") {               // already inside the new song
+                            planPopin(now.track, now.uri, now.durationMs)
+                        } else {
+                            popinArmed = true
+                            addLog("[pop-in lined up for the next song]")
+                        }
+                    } else {
+                        addLog("[no pop-in after this one (${Config.popinChance}% chance each time)]")
+                    }
+                }
+                perform(p, late)
+            } else if (p.style != "intro" && now.uri != p.forUri && progress > 20000) {
+                addLog("[a break missed its moment, rebuilding it]")
                 p.file.delete()
                 prepared = null                                          // missed its moment; it will be rebuilt
             }
@@ -258,7 +338,8 @@ object Engine {
                 if (immediate) { busy = true; perform(p) } else prepared = p
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                addLog("Could not make her voice: ${e.message}")
+                addLog("Could not make her voice: ${e.message}. Trying again in a few seconds.")
+                buildRetryAt = System.currentTimeMillis() + 20000
                 if (queued != null) queued = null
             }
         } finally {
@@ -267,12 +348,12 @@ object Engine {
     }
 
     // ---------- doing the transition ----------
-    private suspend fun perform(p: Prepared) {
+    private suspend fun perform(p: Prepared, late: Boolean = false) {
         busy = true
         try {
             val voiceVol = Config.djVolume / 100f
             when (p.style) {
-                "silent" -> {
+                "silent" -> if (!late) {
                     val device = now.deviceID
                     val uri = now.uri
                     Spotify.pause()
@@ -288,7 +369,7 @@ object Engine {
                     val cur = Spotify.poll()
                     if (cur != null && cur.uri == uri) { Spotify.skipNext(); delay(300) }
                     resumeMusic(device)
-                }
+                } else audio.speak(listOf(Clip(file = p.file, volume = voiceVol)))
                 else -> audio.speak(listOf(Clip(file = p.file, volume = voiceVol)))   // Android turns the Spotify app down while she talks
             }
         } finally {
@@ -298,15 +379,67 @@ object Engine {
         }
     }
 
+    // ---------- pop-in ----------
+    private fun planPopin(t: Track?, uri: String, duration: Int) {
+        if (popinBuilding || popinFile != null) return
+        val after = maxOf(5, Config.popinSeconds)
+        val jitter = minOf(5, after / 2)
+        val at = after * 1000 + randInt(-jitter * 1000, jitter * 1000)
+        if (duration < at + 40000) { addLog("[pop-in skipped: this song is too short for one]"); return }
+        popinUri = uri; popinAt = at; popinForce = false
+        addLog("[pop-in planned about ${at / 1000}s into this song]")
+        scope.launch { buildPopin(t, uri) }
+    }
+
+    private suspend fun buildPopin(t: Track?, uri: String) {
+        popinBuilding = true
+        try {
+            val text = writePopIn(t, logger)
+            addLog("[POP-IN] $text")
+            val data = elevenLabsTTS(text)
+            val file = File(app.cacheDir, "popin_${System.currentTimeMillis()}_${randInt(0, 999)}.mp3")
+            file.writeBytes(data)
+            popinFile = file
+            addLog("[pop-in ready, waiting for its moment]")
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            addLog("Could not make the pop-in voice: ${e.message}")
+            popinUri = null
+            popinForce = false
+        } finally {
+            popinBuilding = false
+        }
+    }
+
+    private suspend fun playPopin(file: File) {
+        busy = true
+        try {
+            audio.speak(listOf(Clip(file = file, volume = Config.djVolume / 100f)))      // Android turns the Spotify app down while she talks
+        } finally {
+            file.delete()
+            busy = false
+            lastPoll = 0L
+        }
+    }
+
+    private fun dropPopin() {
+        popinFile?.delete()
+        popinFile = null; popinUri = null; popinArmed = false; popinForce = false
+    }
+
     /** Gets the music going again, retrying: Spotify is often busy for a second right after a skip. */
     private suspend fun resumeMusic(device: String?) {
         for (attempt in 0 until 6) {
             val cur = Spotify.poll()
             if (cur != null && cur.isPlaying) return
-            val dev = cur?.deviceID ?: device
-            val wake = if (attempt >= 3) Spotify.firstDevice() else null
-            if (wake != null) {
-                Spotify.transfer(wake)                       // last resort: wake / move playback to a device
+            // only ever this phone: never another device such as a speaker or soundbar
+            val dev = Spotify.phoneDevice() ?: device
+            if (dev == null) {
+                addLog("Can't find this phone in Spotify. Open the Spotify app, then tap PLAY.")
+                return
+            }
+            if (attempt >= 3) {
+                Spotify.transfer(dev)                        // last resort: wake the Spotify app on this phone
                 delay(1000)
             } else {
                 Spotify.play(dev)
@@ -322,6 +455,23 @@ object Engine {
         lastPoll = 0L
         delay(300)
         Spotify.poll()?.let { now = it }
+    }
+    suspend fun toggleShuffle() {
+        val on = !now.shuffle
+        now = now.copy(shuffle = on)
+        Spotify.setShuffle(on)
+        lastPoll = 0L
+    }
+    suspend fun cycleRepeat() {
+        val next = when (now.repeat) { "off" -> "context"; "context" -> "track"; else -> "off" }
+        now = now.copy(repeat = next)
+        Spotify.setRepeat(next)
+        lastPoll = 0L
+    }
+    suspend fun seek(ms: Int) {
+        now = now.copy(progressMs = ms, stamp = System.currentTimeMillis())
+        Spotify.seek(ms)
+        lastPoll = 0L
     }
     suspend fun next() { Spotify.skipNext(); lastPoll = 0L }
     suspend fun previous() { Spotify.skipPrevious(); lastPoll = 0L }

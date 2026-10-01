@@ -9,7 +9,8 @@ import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 
-data class Track(val title: String, val artist: String, val album: String, val year: String, val art: String = "") {
+data class Track(val title: String, val artist: String, val album: String, val year: String, val art: String = "",
+                 val artistId: String = "", val albumId: String = "", val artists: List<String> = emptyList(), val release: String = "", val uri: String = "") {
     val describe: String get() = "$title by $artist"
 }
 
@@ -22,6 +23,9 @@ data class Playback(
     val progressMs: Int = 0,
     val stamp: Long = System.currentTimeMillis(),
     val deviceID: String? = null,
+    val deviceName: String = "",
+    val shuffle: Boolean = false,
+    val repeat: String = "off",
 ) {
     /** Milliseconds left in the song, estimated from the last check. */
     val remainingMs: Int
@@ -101,15 +105,21 @@ object Spotify {
     }
 
     // ---------- Web API ----------
+    /** After Spotify says "slow down" (429) the app stays quiet for a while instead of making it worse. */
+    @Volatile var blockedUntil = 0L
+
     suspend fun call(method: String, path: String, query: Map<String, String> = emptyMap(), body: ByteArray? = null): Pair<Int, ByteArray> {
+        if (System.currentTimeMillis() < blockedUntil) return Pair(429, ByteArray(0))
         return try {
             val token = validToken()
             var url = "https://api.spotify.com/v1$path"
             if (query.isNotEmpty()) url += "?" + query.entries.joinToString("&") { enc(it.key) + "=" + enc(it.value) }
-            fetchBytes(
+            val res = fetchBytes(
                 url, timeout = 12000, method = method, body = body,
                 headers = if (body != null) mapOf("Authorization" to "Bearer $token", "Content-Type" to "application/json") else mapOf("Authorization" to "Bearer $token"),
             )
+            if (res.first == 429) blockedUntil = System.currentTimeMillis() + 60_000
+            res
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -117,10 +127,14 @@ object Spotify {
         }
     }
 
+    /** The HTTP status of the most recent playback check, so the app can say WHY it couldn't read playback. */
+    @Volatile var lastStatus = 0
+
     suspend fun poll(): Playback? {
         val t0 = System.currentTimeMillis()
         val (status, data) = call("GET", "/me/player")
         val t1 = System.currentTimeMillis()
+        lastStatus = status
         if (status == 204) return Playback()          // nothing playing anywhere
         if (status != 200) return null
         val j = try { JSONObject(String(data)) } catch (e: Exception) { return null }
@@ -142,6 +156,9 @@ object Spotify {
             progressMs = j.optInt("progress_ms", 0),
             stamp = t0 + (t1 - t0) / 2,
             deviceID = j.optJSONObject("device")?.optString("id", "")?.ifEmpty { null },
+            deviceName = j.optJSONObject("device")?.optString("name", "") ?: "",
+            shuffle = j.optBoolean("shuffle_state", false),
+            repeat = j.optString("repeat_state", "off"),
         )
     }
 
@@ -161,7 +178,12 @@ object Spotify {
         if (notMusic.any { blob.contains(it) }) return null
         val imgs = albumObj?.optJSONArray("images")
         val art = if (imgs != null && imgs.length() > 0) imgs.optJSONObject(0)?.optString("url", "") ?: "" else ""
-        return Track(name, first, album, year, art)
+        return Track(name, first, album, year, art,
+            artistId = arr?.optJSONObject(0)?.optString("id", "") ?: "",
+            albumId = albumObj?.optString("id", "") ?: "",
+            artists = artists,
+            release = albumObj?.optString("release_date", "") ?: "",
+            uri = item.optString("uri", ""))
     }
 
     suspend fun nextTrack(): Track? {
@@ -173,14 +195,15 @@ object Spotify {
         return trackInfo(q.optJSONObject(0))
     }
 
-    /** Any device Spotify knows about (the active one first), used to wake a sleeping Spotify app. */
-    suspend fun firstDevice(): String? {
+    /** This phone's Spotify device (type "Smartphone"). The DJ only ever plays here, never on speakers or other devices. */
+    suspend fun phoneDevice(): String? {
         val (status, data) = call("GET", "/me/player/devices")
         if (status != 200) return null
         return try {
             val arr = JSONObject(String(data)).optJSONArray("devices") ?: return null
             val list = (0 until arr.length()).map { arr.getJSONObject(it) }
-            val pick = list.firstOrNull { it.optBoolean("is_active", false) } ?: list.firstOrNull { !it.optBoolean("is_restricted", false) }
+            val phones = list.filter { it.optString("type", "").equals("Smartphone", ignoreCase = true) && !it.optBoolean("is_restricted", false) }
+            val pick = phones.firstOrNull { it.optBoolean("is_active", false) } ?: phones.firstOrNull()
             pick?.optString("id", "")?.ifEmpty { null }
         } catch (e: Exception) { null }
     }
@@ -190,8 +213,17 @@ object Spotify {
         call("PUT", "/me/player", body = body)
     }
 
+    suspend fun playContext(contextUri: String?, trackUri: String?, device: String?) {
+        val o = JSONObject()
+        if (contextUri != null) o.put("context_uri", contextUri)
+        if (trackUri != null) o.put("uris", org.json.JSONArray().put(trackUri))
+        call("PUT", "/me/player/play", if (device != null) mapOf("device_id" to device) else emptyMap(), o.toString().toByteArray())
+    }
     suspend fun pause() { call("PUT", "/me/player/pause") }
     suspend fun play(device: String?) { call("PUT", "/me/player/play", if (device != null) mapOf("device_id" to device) else emptyMap()) }
+    suspend fun setShuffle(on: Boolean) { call("PUT", "/me/player/shuffle", mapOf("state" to on.toString())) }
+    suspend fun setRepeat(mode: String) { call("PUT", "/me/player/repeat", mapOf("state" to mode)) }
+    suspend fun seek(ms: Int) { call("PUT", "/me/player/seek", mapOf("position_ms" to ms.toString())) }
     suspend fun skipNext() { call("POST", "/me/player/next") }
     suspend fun skipPrevious() { call("POST", "/me/player/previous") }
 }

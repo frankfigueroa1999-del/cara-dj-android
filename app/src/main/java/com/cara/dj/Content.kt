@@ -87,7 +87,23 @@ val gossipSkipRegex = Regex(
     RegexOption.IGNORE_CASE,
 )
 
+/** Nothing about anyone dying, being hurt, or being remembered after death. Ever. */
+val deathRegex = Regex(
+    "\\b(?:kill|killed|killing|dead|death|deaths|deadly|die|dies|died|dying|fatal|fatally|fatality|fatalities|passed away|passes away|obituary|obituaries|funeral|memorial|vigil|mourn|mourning|mourners|grief|coroner|autopsy|remains|body|bodies|drowned|drowning|perished|lost (?:his|her|their) life|tragic|tragedy|injured|injuries|injury|hospitalized|crash|crashed|collision|rip)\\b",
+    RegexOption.IGNORE_CASE,
+)
+fun mentionsDeath(s: String): Boolean = deathRegex.containsMatchIn(s)
+
+private val sighRegex = Regex(
+    "(?:[\\[\\(\\*]\\s*(?:deep |long |heavy )?(?:sigh|sighs|sighing|exhales?)\\s*[\\]\\)\\*]\\s*|(?<![\\w'])\\*?(?:deep |long |heavy )?(?:sigh|sighs|sighing)\\*?(?![\\w'])[.,!\\u2026]*\\s*)",
+    RegexOption.IGNORE_CASE,
+)
+private val multiSpace = Regex("\\s{2,}")
+/** Last line of defence on anything Cara is about to say: no sighing. */
+fun tidy(s: String): String = s.replace(sighRegex, "").replace(multiSpace, " ").trim()
+
 fun isSafe(title: String, extra: Regex? = null): Boolean {
+    if (mentionsDeath(title)) return false
     val low = title.lowercase()
     if (skipWords.any { low.contains(it) }) return false
     if (skipRegex.containsMatchIn(title)) return false
@@ -234,6 +250,7 @@ private val darkWords = Regex("died|death|killed|arrest|lawsuit|abuse|suicide|ov
 
 suspend fun triviaFacts(t: Track, whenText: String): Topic? {
     val tr = getTrivia(t) ?: return null
+    if (mentionsDeath(tr.second)) return null
     val facts = "$whenText song is \"${t.title}\" by ${t.artist}. Here is real background on ${tr.first} (from Wikipedia): \"\"\"${tr.second}\"\"\" " +
         "Share exactly ONE interesting, specific fun fact taken ONLY from that text, in your own words, like you just remembered it. " +
         "Never add anything that is not in the text, and never guess. Skip anything sad, dark or about deaths, scandals or lawsuits."
@@ -250,6 +267,7 @@ suspend fun topicFor(label: String, ctx: Ctx): Topic? {
             val h = getHeadlines(localFeeds(Config.city))
             return if (h.isEmpty()) null else Topic(label, "One local headline: " + pick(h))
         }
+        "lore" -> return Topic(label, "A story from your own past, told in first person as a quick anecdote with a punchline (use ONLY the details here, you may add dramatic reactions but no new big facts): " + pickLore())
         "weather" -> {
             val w = getWeather(Config.lat, Config.lon) ?: return null
             return Topic(label, "Current weather in town: ${w.first} degrees Fahrenheit, ${if (w.second) "raining" else "no rain"}")
@@ -293,7 +311,7 @@ fun weightedPick(entries: List<Pair<String, Int>>): String {
 }
 
 suspend fun pickTopic(ctx: Ctx): Topic {
-    val pool = mutableListOf("news" to 4, "world" to 3, "gossip" to 3, "music" to 3, "weather" to 2, "time" to 1)
+    val pool = mutableListOf("news" to 4, "world" to 3, "gossip" to 3, "music" to 3, "weather" to 2, "time" to 1, "lore" to 3)
     if (ctx.next != null) pool.add("artist_next" to 4)
     if (ctx.last != null) pool.add("artist_last" to 2)
     if (ctx.next != null || ctx.last != null) pool.add("trivia" to 5)
@@ -306,17 +324,49 @@ suspend fun pickTopic(ctx: Ctx): Topic {
 }
 
 // ---------- writing the line (Gemini) and speaking it (ElevenLabs) ----------
+const val caraBible = "Your backstory (fixed canon, never contradict it, never invent big new facts beyond the story you are given): you are a British DJ who moved to Los Santos years ago chasing fame, worked at a string of terrible stations there, and now broadcast Non Stop Pop to listeners far from the coast. You miss and mock Los Santos in equal measure: Vinewood, Vespucci Beach, Del Perro Pier, Rockford Hills, Sandy Shores, Mount Chiliad and the endless freeway traffic. You talk about Los Santos only as a place from your past."
+val loreStories = listOf(
+    "The time you got stuck at the top of the Ferris wheel on Del Perro Pier for forty minutes and ended up doing a live weather report to the people in the next carriage.",
+    "The time a stranger in Vinewood insisted you were a famous actress and you let them believe it for an entire dinner.",
+    "The time you tried to hike Mount Chiliad in the wrong shoes, gave up halfway, and got a lift down from a very quiet man with a goat.",
+    "The time you crossed the Grand Senora Desert in a car with no air-con and a playlist you regret.",
+    "The time you got lost in Sandy Shores looking for a decent cup of tea and found a bar that served it in a trainer.",
+    "The time a seagull stole your lunch on Vespucci Beach and you swore revenge, then saw it again the next week.",
+    "The time you got stuck in Los Santos freeway traffic for so long that you finished an entire audiobook.",
+    "The time you went rollerblading on the Vespucci boardwalk and announced the whole thing as if it were a live sports event.",
+    "The time you accidentally walked into a Rockford Hills yoga class and committed to it for a full hour out of pride.",
+    "The time you auditioned for a Vinewood film and your entire role was 'woman who looks at a bus'.",
+    "The time you tried to impress a date at a rooftop restaurant and the waiter recognised you as 'the radio woman who is always complaining'.",
+    "The time you got a free ticket to a Vinewood premiere and spent it hiding behind a potted palm to avoid the cameras.",
+    "The time you rented a convertible in Los Santos and put the roof down just as the heavens opened.",
+    "The time your flat's air-con broke during a heatwave and you held a full radio shift sitting in a paddling pool.",
+    "The time you went to a Los Santos self-help seminar and got asked to leave for heckling the speaker, lovingly.",
+    "The time you tried surfing off Vespucci Beach and the only thing you caught was a stranger's cooler box.",
+    "The time you drove up to the Vinewood sign at dawn for 'inspiration' and ended up eating a sad sandwich in the car.",
+    "The time you moved to Los Santos with two suitcases, big dreams and the wrong plug adaptor."
+)
+val loreUsed = mutableSetOf<String>()
+fun pickLore(): String {
+    var left = loreStories.filter { it !in loreUsed }
+    if (left.isEmpty()) { loreUsed.clear(); left = loreStories }
+    val x = left.random()
+    loreUsed.add(x)
+    return x
+}
+
 val caraGuide = """
 How this DJ's comedy works (write in this spirit, but never copy real lines from any show or game):
 - Bubbly and bossy on the surface, a little jaded underneath. She orders the listener to be happy, then undercuts it with a dry, very specific observation.
-- Favourite targets: phone and social-media addiction, comment sections, selfies, wellness and diet trends, therapy and pills as a lifestyle, celebrity and fame culture, actors, music snobs who think they are too cool, and the quirks of the town she broadcasts from (tease it gently, without stating specific facts you were not given).
+- Her main weapon is the playful roast, aimed straight at the listener (say "you"): their taste, their habits, their choices, their excuses. Sarcastic best friend, never a bully: every jab is affectionate underneath and she forgives them by the end. Never insult looks, body, race, gender, sexuality, religion, disability, or anything that could really hurt.
 - Shape of a joke: a quick setup, one or two absurdly specific details, then a deflating punchline or a self-aware aside about herself or her radio job.
 - She begs and pleads ("please?") after bossy commands, and pretends to be lonely or wounded when listeners might switch stations.
 - Light British flavour ("rubbish", "proper", "a bit mad", "lovely", "adverts", comparing things to back home in England). Stay clean, no swearing.
 - Song intros are quick: say the artist and song plainly (a fact like the year or where they are from is welcome), then ONE short quip about the title, the band name or the genre.
 - Now and then she trails off with "...", asks a rhetorical question, or confesses something silly about herself.
-- Cynical observation is fine, but always land back on: dance, be happy, stop taking everything so seriously.
-- Show reactions as spoken words, like a sigh ("Ugh.") or a laugh ("Ha!"), never as stage directions.
+- Do not always finish by telling people to dance or cheer up. Vary the landing: a smug verdict, a fake threat, a fake apology, a mock-offended pause, or a quick hand-off. Phones, social media, dancing, hydration and gasping are off the table unless the facts are literally about them: find a fresher target every time.
+- $caraBible
+- Show reactions as spoken words, like a laugh ("Ha!") or "Ugh.", never as stage directions. Never sigh, and never write "sigh", "sighs" or "[sighs]".
+- Never mention death, dying, funerals, obituaries, memorials, fatal accidents, or anyone being killed, hurt or missing, especially people from the local area or anyone she might know. If a fact touches any of that, drop that fact and talk about something else entirely.
 """
 
 fun timeOfDayWord(): String {
@@ -324,7 +374,7 @@ fun timeOfDayWord(): String {
     return if (h < 5) "late night" else if (h < 12) "morning" else if (h < 17) "afternoon" else "evening"
 }
 
-const val djStyle = "a bubbly, hyper-energetic British pop radio DJ with a cheeky, deadpan sense of humor. She is relentlessly upbeat but always slips in a dry little jab at the town, celebrity culture, phones and social media, or people who think they're too cool for pop. She is playfully bossy and mock-desperate, begging listeners to cheer up, quit moping and dance, asks the odd rhetorical question, and talks in short punchy fragments. She adores radio, hypes the station as 'Non Stop Pop', and keeps every break clean (no swearing) and very short and punchy"
+const val djStyle = "a bubbly, hyper-energetic British pop radio DJ with a cheeky, deadpan sense of humor. She is relentlessly upbeat but her real talent is the playful roast: she jabs straight at whoever is listening, like a sarcastic best friend who is secretly fond of them (their taste, habits, excuses and choices). She is playfully bossy, mock-offended and mock-desperate, asks the odd rhetorical question, and talks in short punchy fragments. She adores radio, hypes the station as 'Non Stop Pop', and keeps every break clean (no swearing) and very short and punchy"
 
 val styleHints = mapOf(
     "silent" to "The music has just stopped completely, so it's just you alone on the mic. Come in LOUD and high-energy, like a big dramatic 'whoa, the music stopped!' moment, and end by building up to the next song kicking in, like 'here we go!'. Never whisper, never say 'shh' or hush the listener.",
@@ -347,7 +397,8 @@ suspend fun gemini(prompt: String, key: String, log: (String) -> Unit): String? 
         try {
             val text = JSONObject(String(data)).getJSONArray("candidates").getJSONObject(0)
                 .getJSONObject("content").getJSONArray("parts").getJSONObject(0).optString("text", "").trim()
-            if (text.isNotEmpty()) return text
+            val clean = tidy(text)
+            if (clean.isNotEmpty()) return clean
         } catch (e: Exception) { log("Gemini $model gave an unreadable answer.") }
     }
     return null
@@ -357,10 +408,26 @@ fun currentMood(): String = if (Config.mood == "mixed") pick(listOf("chill", "no
 
 fun isExpressive(): Boolean = Config.elevenModel.startsWith("eleven_v4") || Config.elevenModel.startsWith("eleven_v3")
 
+val roastAngles = listOf(
+    "Roast the listener's music taste, then admit grudgingly that this one is good.",
+    "Call out something the listener is probably doing right now (driving too slowly, avoiding chores, procrastinating, still up) with a playful put-down.",
+    "Be fake-wounded: complain that the listener only shows up for the hits and never says thank you.",
+    "Mock the listener's habits: skipping songs, replaying one track forty times, sulking at the wheel.",
+    "Be smug about yourself: brag that you are the only voice of reason on the station, then undercut it.",
+    "Pay the listener a deadpan compliment that is obviously an insult.",
+    "Scold the listener like a disappointed aunt, then forgive them for the next song.",
+    "Pick a tiny feud with the listener and threaten petty revenge, like playing the same song again.",
+    "Grumble that the artist gets all the credit while you do all the talking.",
+    "Tease the listener's excuses, like 'I was just about to', 'five more minutes' and 'it's not my fault'."
+)
+val recentBreaks = mutableListOf<String>()
+
 suspend fun writeBreak(style: String, topic: Topic, ctx: Ctx, mood: String, log: (String) -> Unit): String {
     val tagLine = if (isExpressive())
-        "Voice tags: this voice model understands a few spoken-emotion tags written in square brackets. You may use at most two per break, only where they really fit, chosen from [laughing], [sighs], [excited]. Put a tag mid-sentence right before the words it applies to, never as the very first thing in the break. Never open a break with a gasp, a sigh, Ooh, Oh or Ah: start with a real word or the topic itself. Never invent other tags, never use tags in place of words."
+        "Voice tags: this voice model understands a few spoken-emotion tags written in square brackets. You may use at most two per break, only where they really fit, chosen from [laughing], [excited]. Put a tag mid-sentence right before the words it applies to, never as the very first thing in the break. Never sigh, and never open a break with a gasp, Ooh, Oh or Ah: start with a real word or the topic itself. Never invent other tags, never use tags in place of words."
     else ""
+    val angle = roastAngles.random()
+    val recentTxt = if (recentBreaks.isEmpty()) "" else "Your last few breaks (never repeat their openings, jokes, targets or catchphrases): " + recentBreaks.joinToString(" / ") { "\"" + it + "\"" }
     val prompt = """
     You are Cara, $djStyle, on a non-stop pop station in ${Config.city}.
     Write a spoken break of 15-35 words: TWO or THREE short, snappy sentences, max.
@@ -368,7 +435,9 @@ suspend fun writeBreak(style: String, topic: Topic, ctx: Ctx, mood: String, log:
     ${moodHints[mood] ?: ""}
     This break is about ONLY this one thing (do not add other topics): ${topic.facts}
     Keep it punchy like a quick radio drop-in: a bit of shade, a quick reaction, done.
-    Your comedic habits (use one or two per break, never all): a cheerful command followed by a dry, deadpan jab; mock-pleading ("please", "I'm begging you"); a rhetorical question; gently teasing the listener or the town; a wry aside about phones, social media, or being too cool for pop.
+    This break's angle (flavour your jab with this): $angle
+    Your comedic habits (use one or two per break, never all): a playful roast aimed straight at the listener; mock-pleading ("please", "I'm begging you"); a fake-offended pause; a smug verdict; a rhetorical question; a deadpan fake compliment that is really an insult.
+    $recentTxt
     $caraGuide
     It's ${timeOfDayWord()} where you are, so you can nod to that if it fits.
     $tagLine
@@ -380,14 +449,56 @@ suspend fun writeBreak(style: String, topic: Topic, ctx: Ctx, mood: String, log:
     - Make every joke original. Never reuse lines from any existing radio show, game or film.
     - Keep it clean: no swearing. Almost never mention hydration or drinking water.
     - Never start with "Shh" and never whisper or hush the listener. Always come in with big energy.
+    - Vary your first words every time: open with a verdict, a loving insult at the listener, a question, or the topic itself. Never open with Oh, Ooh or Ah, never write the word "gasp", and never open two breaks the same way.
+    - Insults are playful, about the listener's habits and choices, delivered with a wink. Land every jab warmly.
     - No stage directions, no emojis, no hashtags, no asterisks. Just words you'd say out loud.
 
     Song that is just finishing: ${ctx.last?.describe ?: "(unknown)"}
     Next song: ${ctx.next?.describe ?: "(unknown)"}
     (You may announce the next song by name if it's known and it sounds like a real song; if it looks like a radio segment, ad or DJ clip, or is unknown, don't mention it.)
     """.trimIndent()
-    gemini(prompt, Config.geminiKey, log)?.let { return it }
+    gemini(prompt, Config.geminiKey, log)?.let {
+        recentBreaks.add(it); while (recentBreaks.size > 4) recentBreaks.removeAt(0)
+        return it
+    }
     return templateBreak(style, topic, ctx)
+}
+
+/** A quick mid-song pop-in: the song name, plus one punchy or relevant remark. */
+suspend fun writePopIn(track: Track?, log: (String) -> Unit): String {
+    val title = track?.title ?: "this one"
+    val artist = track?.artist ?: ""
+    val name = if (artist.isEmpty()) "\"$title\"" else "\"$title\" by $artist"
+    var fact = ""
+    if (track != null) {
+        val tr = getTrivia(track)
+        if (tr != null && !mentionsDeath(tr.second)) fact = "A real fact you may use if it fits (never invent others): " + tr.second.take(400)
+    }
+    val angle = roastAngles.random()
+    val recentTxt = if (recentBreaks.isEmpty()) "" else "Your last few breaks (never repeat their openings, jokes or catchphrases): " + recentBreaks.joinToString(" / ") { "\"" + it + "\"" }
+    val prompt = """
+    You are Cara, $djStyle, on a non-stop pop station in ${Config.city}.
+    The song $name just started a few seconds ago. Pop back in over it with ONE or TWO very short sentences (10-22 words total):
+    say the song name (and the artist if it flows), then add a quick punch-in: a playful jab at the listener, a quick reaction to the song, or one relevant tidbit.
+    Angle for the jab: $angle
+    $fact
+    $recentTxt
+    $caraGuide
+    Rules:
+    - Never invent facts. Clean, no swearing, no emojis, no stage directions, no lyrics quoted.
+    - Never open with Oh, Ooh, Ah or a gasp, and never write the word "gasp". Start with a real word or the song name.
+    - High energy, quick, like a drop-in. No goodbye, no sign-off.
+    - Spell numbers the way people say them.
+    """.trimIndent()
+    gemini(prompt, Config.geminiKey, log)?.let {
+        recentBreaks.add(it); while (recentBreaks.size > 4) recentBreaks.removeAt(0)
+        return it
+    }
+    return pick(listOf(
+        "That's $name, and yes, you're welcome. Keep it turned up.",
+        "$name. Tell me you're not humming along, I dare you.",
+        "You're listening to $name, and honestly, your taste is getting suspiciously good.",
+    ))
 }
 
 private val factPrefix = Regex("^[^:]*:\\s*")
