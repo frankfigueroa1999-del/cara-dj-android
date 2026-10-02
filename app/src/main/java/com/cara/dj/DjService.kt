@@ -25,8 +25,8 @@ class DjService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val n = Notification.Builder(this, "dj")
-            .setContentTitle("Cara DJ is live")
-            .setContentText("Tap to open")
+            .setContentTitle("Cara DJ")
+            .setContentText(intent?.getStringExtra("text") ?: "Tap to open")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(open)
             .setOngoing(true)

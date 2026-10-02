@@ -21,7 +21,18 @@ import java.util.Locale
  */
 
 data class Topic(val label: String, val facts: String, val plain: String? = null, val name: String = label)
-data class Ctx(val last: Track?, val next: Track?)
+data class Ctx(
+    val last: Track?,
+    val next: Track?,
+    /** The station's name right now: whatever's playing ("Late Night Drives"), or Non Stop Pop. */
+    val station: String = Station.FALLBACK,
+    /** What it's named after, in her words ("the playlist "Late Night Drives""). */
+    val stationNote: String = "",
+    /** The station's old name, when the listener switched to something else since her last break. */
+    val switchedFrom: String? = null,
+) {
+    val stationFull: String get() = Station.full(station)
+}
 
 class Segment(val id: String, val name: String, val family: String, val weight: Int)
 class DuoSegment(val id: String, val name: String, val base: String?, val angle: String, val weight: Int)
@@ -100,7 +111,6 @@ object Brain {
         coDefaultVoice = d.optString("coDefaultVoice", coDefaultVoice)
         stopWords = list("stopWords").toSet()
         Memory.load(File(ctx.filesDir, "cara-memory.json"))
-        Station.load(File(ctx.filesDir, "context-names.json"))
         ready = true
     }
 
@@ -169,7 +179,7 @@ object Brain {
     private fun reusable(ctx: Ctx, extra: Set<String> = emptySet()): Set<String> {
         val s = mutableSetOf("non", "stop", "pop", "cara", "fm", "station")
         s.addAll(extra)
-        s.addAll(words(Station.name()))
+        s.addAll(words(ctx.station + " " + (ctx.switchedFrom ?: "")))
         for (t in listOf(ctx.next, ctx.last)) if (t != null) s.addAll(words("${t.title} ${t.artist} ${t.album}").filter { it.length > 2 })
         s.addAll(words(Config.city))
         return s
@@ -210,18 +220,18 @@ object Brain {
     }
 
     // ------------------------------------------------------------ who she is, and the station
-    fun bible(): String {
-        val now = if (Station.name() == Station.FALLBACK)
+    fun bible(ctx: Ctx): String {
+        val now = if (ctx.station == Station.FALLBACK)
             "worked at a string of terrible stations there, and now broadcasts Non Stop Pop FM to listeners far from the coast"
         else "worked at a string of terrible stations there before making her name on Non Stop Pop FM, and these days runs her own station far from the coast, which always takes the name of whatever the listener puts on"
         return "Her backstory (fixed, never contradict it or add big new facts): she's British, moved to Los Santos years ago chasing fame, $now. " +
             "She misses and mocks Los Santos in equal measure (Vinewood, Vespucci Beach, Del Perro Pier, Rockford Hills, Sandy Shores, Mount Chiliad, the endless freeway traffic), and only ever talks about it as a place from her past."
     }
 
-    fun stationLine(): String {
-        if (Station.name() == Station.FALLBACK) return "THE STATION: Non Stop Pop FM."
-        val from = Station.note().ifEmpty { "\"${Station.name()}\"" }
-        return "THE STATION: it's named after whatever the listener is playing, which right now is $from, so on air it's \"${Station.full()}\". " +
+    fun stationLine(ctx: Ctx): String {
+        if (ctx.station == Station.FALLBACK) return "THE STATION: Non Stop Pop FM."
+        val from = ctx.stationNote.ifEmpty { "\"${ctx.station}\"" }
+        return "THE STATION: it's named after whatever the listener is playing, which right now is $from, so on air it's \"${ctx.stationFull}\". " +
             "Use the name when it fits (dropping it in like a real DJ, bragging about it, a cheeky comment on the name), not in every break. Never call it Non Stop Pop: that was her old station, back in Los Santos."
     }
 
@@ -477,7 +487,7 @@ object Brain {
             "confession" -> return t("A silly confession about herself: " + Memory.fresh("confessions", list("confessions")) + ". Own it dramatically.")
             "opinion" -> return t("Her strong, ridiculous opinion on this burning question: " + Memory.fresh("opinions", list("opinions")) + " Pick a side, defend it absurdly, and dare the listener to disagree.")
             "fake_ad" -> return t("A short parody advert, read by Cara, for this totally made-up product: " + Memory.fresh("fakeAds", list("fakeAds")) + " Include a ridiculous catchphrase for it and a fake 'terms and conditions' line at top speed.")
-            "station_hype" -> return t("Hype the station, ${Station.full()}, itself in a fresh, absurd way: what it'd be if it were a person, a food or a weather system, or a ridiculous line about it, said dead straight as if it's always been the station's motto.")
+            "station_hype" -> return t("Hype the station, ${ctx.stationFull}, itself in a fresh, absurd way: what it'd be if it were a person, a food or a weather system, or a ridiculous line about it, said dead straight as if it's always been the station's motto.")
             "roast" -> return t("A playful roast. " + Memory.fresh("roasts", list("roasts")))
             "compliment" -> return t("Give the listener a backhanded compliment that's really a tease, then a sincere one.")
             "horoscope" -> return t("A completely made-up, obviously silly horoscope for ${list("signs").ifEmpty { listOf("Leo") }.random()}, with a weirdly specific prediction about snacks, socks, songs or parking.")
@@ -534,19 +544,19 @@ object Brain {
         val tagChoices = tags.filter { it !in Memory.last("tags", 4) }.ifEmpty { tags }.shuffled().take(2)
         val (lo, hi) = wordRange(style)
         val skip = reusable(ctx)
-        val switched = Station.switchedFrom()
+        val switched = ctx.switchedFrom
         log("[style: ${fmt[0]} · opening: ${opening[0]} · $lo-$hi words]")
         val tagLine = if (isExpressive())
             "She may use up to two emotion tags, ONLY [${tagChoices.joinToString("] or [")}], each placed mid-sentence right before the words it colours (never first, never on its own). Or none."
         else "Don't use any square-bracket tags."
         val switchLine = if (switched != null)
-            "\n- Fresh news: the listener just switched stations, from \"${fullName(switched)}\" to \"${Station.full()}\". Welcome them to the new one somewhere in this break, in one quick, playful line (new name, same Cara)."
+            "\n- Fresh news: the listener just switched stations, from \"${Station.full(switched)}\" to \"${ctx.stationFull}\". Welcome them to the new one somewhere in this break, in one quick, playful line (new name, same Cara)."
         else ""
         val prompt = listOf(
-            "You are Cara, the DJ on ${Station.full()}, broadcasting to ${Config.city}.",
+            "You are Cara, the DJ on ${ctx.stationFull}, broadcasting to ${Config.city}.",
             persona,
-            bible(),
-            stationLine(),
+            bible(ctx),
+            stationLine(ctx),
             "",
             "THIS BREAK",
             "- What's happening: ${situations[style] ?: situations["talkover"]}$switchLine",
@@ -582,10 +592,10 @@ object Brain {
     /** No Gemini key (or Gemini is down): simple lines, still varied. */
     private fun templateBreak(topic: Topic, ctx: Ctx): String {
         val city = Config.city
-        val openers = listOf("Cara here, keeping you company.", "${Station.full()}, Cara on the mic.", "Hello, $city!",
+        val openers = listOf("Cara here, keeping you company.", "${ctx.stationFull}, Cara on the mic.", "Hello, $city!",
             "Cara again. Did you miss me?", "This is Cara, live-ish and lovely.", "Guess who's back.",
             "Your favourite voice, reporting for duty.", "Cara checking in.", "Here's Cara, with absolutely no notes.",
-            "It's me, the voice in your speakers.", "${Station.name()}, and I'm still here.", "Cara, back by popular demand.")
+            "It's me, the voice in your speakers.", "${ctx.station}, and I'm still here.", "Cara, back by popular demand.")
         val closers = listOf("Back to the music.", "Here's the next one.", "Turn it up for this.", "Stay right there.",
             "Don't go anywhere.", "More pop, coming right up.", "You're in good hands.", "Off we go.",
             "Right, on with the show.", "This next one's a goodie.")
@@ -598,7 +608,7 @@ object Brain {
     }
 
     /** A quick drop-in a few seconds into a song. */
-    suspend fun writePopin(info: Track?, log: (String) -> Unit): String {
+    suspend fun writePopin(info: Track?, station: String, log: (String) -> Unit): String {
         val title = info?.title ?: "this one"
         val artist = info?.artist ?: ""
         val name = if (artist.isNotEmpty()) "\"$title\" by $artist" else "\"$title\""
@@ -611,10 +621,10 @@ object Brain {
         val kind = kinds.ifEmpty { popinKinds }.random()
         val (lo, hi) = when (chattiness()) { "quick" -> Pair(8, 16); "normal" -> Pair(10, 22); else -> Pair(14, 30) }
         val tag = tags.filter { it !in Memory.last("tags", 4) }.ifEmpty { tags }.random()
-        val skip = reusable(Ctx(null, info))
+        val skip = reusable(Ctx(null, info, station))
         log("[pop-in style: ${kind[0]}]")
         val prompt = listOfNotNull(
-            "You are Cara, the DJ on ${Station.full()}, broadcasting to ${Config.city}.",
+            "You are Cara, the DJ on ${Station.full(station)}, broadcasting to ${Config.city}.",
             persona,
             "",
             "The song $name started a few seconds ago, and she pops back in over it.",
@@ -651,7 +661,7 @@ object Brain {
     // ------------------------------------------------------------ Cara and Scratch together
     private suspend fun pickDuoTopic(ctx: Ctx, log: (String) -> Unit): Topic {
         val recent = Memory.last("segments", 8).toSet()
-        val pool = duoSegments.filter { "duo_" + it.id !in recent && !(it.id == "station_name" && Station.name() == Station.FALLBACK) }
+        val pool = duoSegments.filter { "duo_" + it.id !in recent && !(it.id == "station_name" && ctx.station == Station.FALLBACK) }
             .map { Pair(it.id, it.weight) }.toMutableList()
         while (pool.isNotEmpty()) {
             val sid = weightedPick(pool)
@@ -680,7 +690,7 @@ object Brain {
                 "quiz" -> { val q = Memory.fresh("quiz", quiz); facts = "Question: ${q[0]} Answer: ${q[1]}." }
                 "advice" -> facts = "A listener's dilemma: " + Memory.fresh("dilemmas", list("dilemmas"))
                 "fake_ad" -> facts = "A totally made-up product: " + Memory.fresh("fakeAds", list("fakeAds"))
-                "station_name" -> facts = "The station is named after ${Station.note().ifEmpty { "\"" + Station.name() + "\"" }}, so on air it's \"${Station.full()}\"."
+                "station_name" -> facts = "The station is named after ${ctx.stationNote.ifEmpty { "\"" + ctx.station + "\"" }}, so on air it's \"${ctx.stationFull}\"."
             }
         }
         return Topic("duo_" + seg.id, if (facts.isEmpty()) seg.angle else "$facts ${seg.angle}", plain, seg.name)
@@ -733,23 +743,23 @@ object Brain {
         val skip = reusable(ctx, words(coName).toSet() + setOf("london", "vinyl"))
         val songWords = words(listOfNotNull(ctx.last?.describe, ctx.next?.describe).joinToString(" ")).toSet()
         val coMove = Memory.fresh("coMoves", list("coMoves").ifEmpty { listOf("Rides Cara's chaos with big, booming energy, then lands one perfect comeback.") })
-        val switched = Station.switchedFrom()
+        val switched = ctx.switchedFrom
         log("[duo: $lo-$hi lines, $first first]")
         val tagLine = if (isExpressive())
             "Each line may use one emotion tag, ONLY [${tagChoices.joinToString("] or [")}], placed mid-sentence right before the words it colours (never first). Most lines have none."
         else "Don't use any square-bracket tags."
         val switchLine = if (switched != null)
-            "\n- Fresh news: the listener just switched stations, from \"${fullName(switched)}\" to \"${Station.full()}\". One of them welcomes the listener to the new one in a quick, playful line."
+            "\n- Fresh news: the listener just switched stations, from \"${Station.full(switched)}\" to \"${ctx.stationFull}\". One of them welcomes the listener to the new one in a quick, playful line."
         else ""
         val up = coLabel
         val prompt = listOf(
-            "You write a short on-air exchange between the two DJs of ${Station.full()}, broadcasting to ${Config.city}.",
+            "You write a short on-air exchange between the two DJs of ${ctx.stationFull}, broadcasting to ${Config.city}.",
             "CARA: $persona",
-            bible(),
+            bible(ctx),
             "$up: $coPersona",
             coBible,
             coIdentity,
-            stationLine(),
+            stationLine(ctx),
             whoIsWho,
             "",
             "THIS BREAK",
@@ -912,171 +922,5 @@ object Memory {
             while (l.size > 12) l.removeAt(0)
         }
         save()
-    }
-}
-
-// ---------------------------------------------------------------- the station is named after whatever's playing
-fun fullName(name: String): String {
-    val last = name.split(" ").lastOrNull()?.lowercase() ?: ""
-    return if (last in setOf("fm", "am", "radio", "station")) name else "$name FM"
-}
-
-object Station {
-    const val FALLBACK = "Non Stop Pop"
-    private var uri = ""
-    private var raw = ""
-    private var atLastBreak = ""
-    private var names = mutableMapOf<String, String>()
-    private var file: File? = null
-    private var tries = 0
-    private var retryAt = 0L
-
-    /** What the screen shows (the station's full name, or "" on plain Non Stop Pop). */
-    var shown by mutableStateOf("")
-        private set
-
-    fun load(f: File) {
-        file = f
-        try {
-            if (f.exists()) {
-                val j = JSONObject(f.readText())
-                for (k in j.keys()) names[k] = j.optString(k, "")
-            }
-        } catch (e: Exception) { }
-    }
-
-    private fun saveNames() {
-        val f = file ?: return
-        try {
-            val j = JSONObject()
-            for ((k, v) in names) j.put(k, v)
-            f.writeText(j.toString())
-        } catch (e: Exception) { }
-    }
-
-    private fun refreshShown() {
-        shown = if (name() == FALLBACK) "" else full()
-    }
-
-    fun key(u: String): String {
-        val parts = u.split(":")
-        if ("collection" in parts) return "spotify:collection"
-        for (kind in listOf("playlist", "album", "artist", "show")) {
-            val i = parts.indexOf(kind)
-            if (i >= 0 && i + 1 < parts.size) return "spotify:$kind:${parts[i + 1]}"
-        }
-        return u
-    }
-
-    /** Called with the playback's context each time the app checks what's playing. */
-    fun update(contextUri: String?) {
-        val u = contextUri ?: ""
-        if (u != uri) {
-            val was = full()
-            uri = u
-            tries = 0
-            retryAt = 0L
-            val k = key(u)
-            raw = names[k] ?: (if (k == "spotify:collection") "Liked Songs" else "")
-            if (u.isNotEmpty() && raw.isEmpty()) {
-                retryAt = System.currentTimeMillis() + 15000
-                Engine.scope.launch { lookUp(u) }
-            } else if (full() != was) {
-                Engine.addLog("[station: ${full()}]")
-            }
-            refreshShown()
-        } else if (u.isNotEmpty() && raw.isEmpty() && tries < 4 && System.currentTimeMillis() >= retryAt) {
-            retryAt = System.currentTimeMillis() + 15000
-            Engine.scope.launch { lookUp(u) }
-        }
-    }
-
-    private suspend fun lookUp(u: String) {
-        tries += 1
-        retryAt = System.currentTimeMillis() + (if (tries < 3) 15000L else 120000L)
-        val k = key(u)
-        val parts = k.split(":")
-        if (parts.size < 3) return
-        val path = when (parts[1]) {
-            "playlist" -> "/playlists/${parts[2]}"
-            "album" -> "/albums/${parts[2]}"
-            "artist" -> "/artists/${parts[2]}"
-            else -> return
-        }
-        val (st, data) = Spotify.call("GET", path, if (parts[1] == "playlist") mapOf("fields" to "name") else emptyMap())
-        var n = ""
-        if (st == 200) {
-            n = try { JSONObject(String(data)).optString("name", "") } catch (e: Exception) { "" }
-        }
-        if (u == uri && n.isNotEmpty()) {
-            raw = n
-            if (names.size >= 150) names = mutableMapOf()
-            names[k] = n
-            saveNames()
-            Engine.addLog("[station: ${full()}]")
-            refreshShown()
-        } else if (u == uri && (st == 403 || st == 404) && parts[1] == "playlist") {
-            Engine.scopeHint()
-        }
-    }
-
-    /** A name we already know (you picked it in the app), so there's nothing to look up. */
-    fun remember(u: String, name: String) {
-        val k = key(u)
-        if (k.isEmpty() || name.isBlank()) return
-        if (names.size >= 150) names = mutableMapOf()
-        names[k] = name.trim()
-        saveNames()
-    }
-
-    private fun clean(r: String): String {
-        val sb = StringBuilder()
-        var i = 0
-        while (i < r.length) {
-            val cp = r.codePointAt(i)
-            val emoji = cp >= 0x1F000 || cp in 0x2600..0x27BF || cp == 0xFE0F || cp == 0x200D || cp in 0x2190..0x21FF
-            val ch = String(Character.toChars(cp))
-            if (!emoji && (Character.isLetterOrDigit(cp) || ch in setOf("'", "’", "&", "!", "?", ".", ",", "-", "+", ":", "/", "(", ")", "$", "#", "@", "%"))) {
-                sb.append(if (ch == "’") "'" else ch)
-            } else sb.append(' ')
-            i += Character.charCount(cp)
-        }
-        var n = sb.toString().split(" ").filter { it.isNotEmpty() }.joinToString(" ").trim(' ', '-', ':', '/', '.', ',', '+')
-        if (n.length > 40) {
-            val kept = mutableListOf<String>()
-            for (w in n.split(" ")) {
-                if ((kept + w).joinToString(" ").length > 36) break
-                kept.add(w)
-            }
-            n = if (kept.isNotEmpty()) kept.joinToString(" ") else n.take(36)
-        }
-        return if (n.any { it.isLetterOrDigit() }) n else ""
-    }
-
-    fun name(): String {
-        val n = if (uri.isNotEmpty()) clean(raw) else ""
-        return n.ifEmpty { FALLBACK }
-    }
-
-    fun full(): String = fullName(name())
-
-    fun note(): String {
-        val n = name()
-        if (n == FALLBACK) return ""
-        return when (key(uri).split(":").getOrNull(1)) {
-            "playlist" -> "the playlist \"$n\""
-            "album" -> "the album \"$n\""
-            "artist" -> "songs by $n"
-            "collection" -> "the listener's Liked Songs"
-            else -> "\"$n\""
-        }
-    }
-
-    /** The station's old name if it changed since her last break (she welcomes you to the new one). */
-    fun switchedFrom(): String? {
-        val now = name()
-        val before = atLastBreak
-        atLastBreak = now
-        return if (before.isNotEmpty() && before != now && before != FALLBACK && now != FALLBACK) before else null
     }
 }

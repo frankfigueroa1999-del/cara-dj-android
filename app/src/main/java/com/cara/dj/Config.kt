@@ -49,8 +49,29 @@ object Config {
     lateinit var prefs: SharedPreferences
 
     fun init(ctx: Context) {
-        if (!this::prefs.isInitialized) prefs = ctx.applicationContext.getSharedPreferences("cara", Context.MODE_PRIVATE)
+        if (this::prefs.isInitialized) return
+        prefs = ctx.applicationContext.getSharedPreferences("cara", Context.MODE_PRIVATE)
+        // anyone who already set the app up never sees the welcome screens
+        if (!prefs.getBoolean("welcomed", false) && prefs.getString("clientID", "").orEmpty().isNotEmpty() &&
+            prefs.getString("elevenKey", "").orEmpty().isNotEmpty()) {
+            prefs.edit().putBoolean("welcomed", true).apply()
+        }
     }
+
+    /** Stingers are remade with the station's name (whenever something nameable is playing). */
+    var stationStingers: Boolean by SP("stationStingers", true)
+    /** The ElevenLabs voice that reads the station stingers ("" for the default announcer). */
+    var stationVoice: String by SP("stationVoice", "")
+    /** The one-time welcome / setup screens have been shown. */
+    var welcomed: Boolean by SP("welcomed", false)
+    /** Recent searches, newest first, as a JSON list. */
+    var recentSearchesJson: String by SP("recentSearches", "[]")
+    var recentSearches: List<String>
+        get() = try {
+            val a = org.json.JSONArray(recentSearchesJson)
+            (0 until a.length()).map { a.optString(it, "") }.filter { it.isNotEmpty() }
+        } catch (e: Exception) { emptyList() }
+        set(v) { recentSearchesJson = org.json.JSONArray(v).toString() }
 
     var clientID: String by SP("clientID", "")
     var elevenKey: String by SP("elevenKey", "")
@@ -85,4 +106,16 @@ object Config {
     var tokenExpiry: Double by SP("tokenExpiry", 0.0)
     var verifier: String by SP("verifier", "")
     var grantedScopes: String by SP("grantedScopes", "")
+
+    /** The short silent Spotify track silent breaks talk over ("" when none can be played on this account). */
+    var silenceURI: String by SP("silenceURI", "")
+    /** When that was last checked with Spotify (seconds). */
+    var silenceCheckedAt: Double by SP("silenceCheckedAt", 0.0)
+    private var silenceBadRaw: String by SP("silenceBad", "")
+    /** Silent tracks Spotify wouldn't play on this account (never tried again, but still skipped if they turn up). */
+    var silenceBadList: List<String>
+        get() = silenceBadRaw.split(",").filter { it.isNotEmpty() }
+        set(v) { silenceBadRaw = v.joinToString(",") }
+    /** Names of playlists / albums / artists we've seen, so the station is named the moment one starts (JSON object). */
+    var contextNamesJson: String by SP("contextNames", "{}")
 }

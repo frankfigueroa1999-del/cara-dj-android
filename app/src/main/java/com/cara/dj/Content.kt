@@ -18,11 +18,14 @@ fun <T> pick(a: List<T>): T = a[Random.nextInt(a.size)]
 fun randInt(lo: Int, hi: Int): Int = if (lo >= hi) lo else Random.nextInt(lo, hi + 1)
 fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
 
-/** Plain web request. Returns (status code, body); status 0 means it could not connect. */
-suspend fun fetchBytes(
+/** A finished web request: status 0 means it could not connect. */
+class HttpResult(val status: Int, val data: ByteArray, val retryAfter: Double = 0.0)
+
+/** Plain web request, with the one response header the app cares about (Retry-After). */
+suspend fun http(
     url: String, timeout: Int = 10000, method: String = "GET",
     headers: Map<String, String> = emptyMap(), body: ByteArray? = null,
-): Pair<Int, ByteArray> = withContext(Dispatchers.IO) {
+): HttpResult = withContext(Dispatchers.IO) {
     try {
         val c = URL(url).openConnection() as HttpURLConnection
         c.requestMethod = method
@@ -30,18 +33,28 @@ suspend fun fetchBytes(
         c.readTimeout = timeout
         c.setRequestProperty("User-Agent", "Mozilla/5.0 CaraDJ")
         for ((k, v) in headers) c.setRequestProperty(k, v)
-        if (method != "GET") {
+        if (body != null || method == "POST" || method == "PUT") {
             c.doOutput = true
             c.outputStream.use { it.write(body ?: ByteArray(0)) }
         }
         val code = c.responseCode
         val stream = if (code >= 400) c.errorStream else c.inputStream
         val data = stream?.use { it.readBytes() } ?: ByteArray(0)
+        val ra = c.getHeaderField("Retry-After")?.trim()?.toDoubleOrNull() ?: 0.0
         c.disconnect()
-        Pair(code, data)
+        HttpResult(code, data, ra)
     } catch (e: Exception) {
-        Pair(0, ByteArray(0))
+        HttpResult(0, ByteArray(0))
     }
+}
+
+/** Plain web request. Returns (status code, body); status 0 means it could not connect. */
+suspend fun fetchBytes(
+    url: String, timeout: Int = 10000, method: String = "GET",
+    headers: Map<String, String> = emptyMap(), body: ByteArray? = null,
+): Pair<Int, ByteArray> {
+    val r = http(url, timeout, method, headers, body)
+    return Pair(r.status, r.data)
 }
 
 // ---------- RSS ----------
@@ -267,15 +280,17 @@ suspend fun gemini(prompt: String, key: String, log: (String) -> Unit): String? 
 
 fun isExpressive(): Boolean = Config.elevenModel.startsWith("eleven_v4") || Config.elevenModel.startsWith("eleven_v3")
 
-/** Speaks [text] in Cara's voice, or in [voiceOverride] (Scratch's voice) when that's given. */
-suspend fun elevenLabsTTS(text: String, voiceOverride: String? = null): ByteArray {
+/** Speaks [text] in Cara's voice, or in [voiceOverride] (Scratch's or the station voice) when that's given.
+ *  [announcer] gives the station voice a steadier, punchier read. */
+suspend fun elevenLabsTTS(text: String, voiceOverride: String? = null, announcer: Boolean = false): ByteArray {
     val key = Config.elevenKey.trim()
     val voice = (voiceOverride ?: Config.elevenVoice).trim()
     if (key.isEmpty() || voice.isEmpty()) throw Exception("Add your ElevenLabs key and Voice ID in Settings.")
     val settings = if (isExpressive())
-        JSONObject().put("stability", 0.25).put("similarity_boost", 1.0)
+        JSONObject().put("stability", if (announcer) 0.5 else 0.25).put("similarity_boost", if (announcer) 0.85 else 1.0)
     else
-        JSONObject().put("stability", 0.35).put("similarity_boost", 0.8).put("style", 0.4).put("use_speaker_boost", true).put("speed", 1.05)
+        JSONObject().put("stability", if (announcer) 0.45 else 0.35).put("similarity_boost", 0.8).put("style", if (announcer) 0.55 else 0.4)
+            .put("use_speaker_boost", true).put("speed", if (announcer) 1.1 else 1.05)
     val body = JSONObject().put("text", text).put("model_id", Config.elevenModel).put("voice_settings", settings).toString().toByteArray()
     val (status, data) = fetchBytes(
         "https://api.elevenlabs.io/v1/text-to-speech/${enc(voice)}?output_format=mp3_44100_128", 30000, "POST",
@@ -284,7 +299,7 @@ suspend fun elevenLabsTTS(text: String, voiceOverride: String? = null): ByteArra
     if (status != 200) {
         val msg = String(data)
         val hint = if (msg.contains("invalid_api_key")) " (Use the secret key that starts with sk_, not the key ID.)"
-            else if (voiceOverride != null && (status == 404 || msg.contains("voice_not_found"))) " (That's Scratch's voice: check his Voice ID in Settings, or leave it empty for the default.)"
+            else if (voiceOverride != null && (status == 404 || msg.contains("voice_not_found"))) " (Check that Voice ID in Settings, or leave it empty for the default.)"
             else ""
         throw Exception("ElevenLabs $status: ${msg.take(120)}$hint")
     }
