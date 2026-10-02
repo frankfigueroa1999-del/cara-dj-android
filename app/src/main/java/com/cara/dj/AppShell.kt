@@ -1,5 +1,10 @@
 package com.cara.dj
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.border
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -200,27 +205,37 @@ private fun Modifier.matchParentSizeFix(h: androidx.compose.ui.unit.Dp): Modifie
 
 @Composable
 fun TabBar() {
-    Row(
+    Box(
         Modifier.fillMaxWidth().height(Theme.tabBarHeight)
             .shadow(18.dp, RoundedCornerShape(Theme.tabBarHeight / 2))
             .frosted(Theme.tabBarHeight / 2)
             .padding(5.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        TabItem(AppTab.HOME, "Home", "house.fill", Modifier.weight(1f))
-        TabItem(AppTab.CARA, "Cara", "dot.radiowaves.left.and.right", Modifier.weight(1f))
-        TabItem(AppTab.LIBRARY, "Library", "square.stack.fill", Modifier.weight(1f))
-        TabItem(AppTab.SEARCH, "Search", "magnifyingglass", Modifier.weight(1f))
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val gap = 2.dp
+            val w = (maxWidth - gap * 3) / 4
+            // the pill glides over to the tab you pick
+            val x by animateDpAsState((w + gap) * Router.tab.ordinal, spring(dampingRatio = 0.86f, stiffness = 195f), label = "pill")
+            Box(
+                Modifier.offset(x = x).width(w).fillMaxHeight().clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.14f)).border(0.6.dp, Color.White.copy(alpha = 0.1f), CircleShape)
+            )
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                TabItem(AppTab.HOME, "Home", "house.fill", Modifier.weight(1f))
+                TabItem(AppTab.CARA, "Cara", "dot.radiowaves.left.and.right", Modifier.weight(1f))
+                TabItem(AppTab.LIBRARY, "Library", "square.stack.fill", Modifier.weight(1f))
+                TabItem(AppTab.SEARCH, "Search", "magnifyingglass", Modifier.weight(1f))
+            }
+        }
     }
 }
 
 @Composable
 private fun TabItem(t: AppTab, title: String, icon: String, modifier: Modifier) {
     val on = Router.tab == t
-    val fill by animateFloatAsState(if (on) 1f else 0f, tween(180), label = "tab")
+    val tint by animateColorAsState(if (on) Color.White else Theme.text2, tween(180), label = "tab")
     Column(
         modifier.fillMaxSize().clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.14f * fill), CircleShape)
             .tap {
                 if (!on) Haptics.soft()
                 Router.select(t)
@@ -228,9 +243,9 @@ private fun TabItem(t: AppTab, title: String, icon: String, modifier: Modifier) 
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(sym(icon), contentDescription = title, tint = if (on) Color.White else Theme.text2, modifier = Modifier.size(22.dp))
+        Icon(sym(icon), contentDescription = title, tint = tint, modifier = Modifier.size(22.dp))
         Spacer(Modifier.height(3.dp))
-        Text(title, color = if (on) Color.White else Theme.text2, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Text(title, color = tint, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

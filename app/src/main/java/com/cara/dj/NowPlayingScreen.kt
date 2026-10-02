@@ -1,5 +1,9 @@
 package com.cara.dj
 
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.DropdownMenuItem
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -359,6 +363,7 @@ private fun PlayerPanel(onDevices: () -> Unit, onCara: () -> Unit) {
     val scope = rememberCoroutineScope()
     val item = Engine.displayItem
     var djMenu by remember { mutableStateOf(false) }
+    var transitionMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
     Column {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth()) {
@@ -390,13 +395,20 @@ private fun PlayerPanel(onDevices: () -> Unit, onCara: () -> Unit) {
                     MenuItem("Talk Now", "mic.fill") { djMenu = false; Engine.testBreak() }
                     MenuItem("Pop In Now", "sparkles") { djMenu = false; Engine.testPopin() }
                     MenuItem("Play a Stinger", "bolt.fill") { djMenu = false; scope.launch { Engine.testStinger() } }
-                    MenuItem("With Scratch", "person.2.fill") { djMenu = false; Engine.testDuo() }
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
-                    MenuItem("Next: Talk Over", "forward.end") { djMenu = false; Engine.queue("talkover") }
-                    MenuItem("Next: Over the Intro", "forward.end") { djMenu = false; Engine.queue("intro") }
-                    MenuItem("Next: Silent", "forward.end") { djMenu = false; Engine.queue("silent") }
+                    MenuItem("Next Transition", "forward.end") { transitionMenu = true }
                     HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
                     MenuItem("Cara Options…", "slider.horizontal.3") { djMenu = false; onCara() }
+                }
+                // the "Next Transition" submenu
+                DarkMenu(transitionMenu, { transitionMenu = false }) {
+                    for ((title, style) in listOf("Talk Over" to "talkover", "Over the Intro" to "intro", "Silent" to "silent")) {
+                        DropdownMenuItem(
+                            text = { Text(title, fontSize = 16.sp) },
+                            onClick = { transitionMenu = false; djMenu = false; Engine.queue(style) },
+                            trailingIcon = { if (Engine.queued == style) Icon(sym("checkmark"), contentDescription = null, modifier = Modifier.size(20.dp)) },
+                            colors = MenuDefaults.itemColors(textColor = Color.White, trailingIconColor = Color.White),
+                        )
+                    }
                 }
             }
             Spacer(Modifier.width(8.dp))
@@ -985,8 +997,8 @@ private fun CaraOptionsSheet(onDismiss: () -> Unit, onSettings: () -> Unit) {
             StepperRow("Pop-in timing", "about ${Config.popinSeconds} seconds into the song", Config.popinSeconds, 5..120, 5) { Config.popinSeconds = it }
             ToggleRow("Pop-in test mode (after every non-silent break)", Config.popinTest) { Config.popinTest = it }
 
-            SliderRow("DJ volume", Config.djVolume) { Config.djVolume = it }
-            SliderRow("Stinger volume", Config.stingerVolume) { Config.stingerVolume = it }
+            SheetSlider("DJ VOLUME", Config.djVolume) { Config.djVolume = it }
+            SheetSlider("STINGER VOLUME", Config.stingerVolume) { Config.stingerVolume = it }
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SmallLabel("HOW MUCH SHE SAYS")
@@ -1024,6 +1036,18 @@ private fun CaraOptionsSheet(onDismiss: () -> Unit, onSettings: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** A slider under a small caps label, like the iPhone's DJ options. */
+@Composable
+private fun SheetSlider(title: String, value: Float, onChange: (Float) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SmallLabel(title)
+        Slider(
+            value = value, onValueChange = onChange, valueRange = 0f..100f,
+            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.2f)),
+        )
     }
 }
 
