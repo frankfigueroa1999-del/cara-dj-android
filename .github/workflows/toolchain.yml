@@ -1,0 +1,49 @@
+name: Toolchain bundle (offline builds)
+
+on:
+  push:
+    branches: [toolchain]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.14.3
+          cache-disabled: true
+
+      - name: Build once (fills the dependency cache)
+        run: gradle assembleDebug --no-daemon
+
+      - name: Pack the cache and the SDK bits
+        run: |
+          SDK="$ANDROID_HOME"
+          echo "SDK at $SDK"
+          ls "$SDK/platforms" "$SDK/build-tools"
+          BT=34.0.0
+          [ -d "$SDK/build-tools/$BT" ] || BT=$(ls "$SDK/build-tools" | sort -V | tail -1)
+          echo "build-tools $BT"
+          tar -C "$SDK" -czf android-sdk.tgz platforms/android-35 "build-tools/$BT" licenses
+          tar -C ~/.gradle/caches -czf gradle-modules.tgz modules-2
+          ls -la *.tgz
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete toolchain --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          sleep 3
+          gh release create toolchain gradle-modules.tgz android-sdk.tgz \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Build toolchain (offline builds)" --notes "Dependency cache and SDK parts, for building offline."
