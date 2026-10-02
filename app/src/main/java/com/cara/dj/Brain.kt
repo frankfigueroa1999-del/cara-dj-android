@@ -219,8 +219,60 @@ object Brain {
         return Pair(out.replace(spaces, " ").trim().trim('"').trim(), used)
     }
 
+    // ------------------------------------------------------------ reading the room
+    /** The song the listener picked, and what it's about: now and then a DJ makes one quick, playful guess about them from it.
+     *  [lyrics] is the whole text (to catch a quoted line), [excerpt] a short piece for the prompt; both null for a heavy song. */
+    class SongRead(val track: Track, val lyrics: String?, val excerpt: String?)
+
+    suspend fun songRead(t: Track?): SongRead? {
+        if (t == null || !t.isMusic || t.title.isEmpty()) return null
+        var full = try { Lyrics.text(t) } catch (e: Exception) { null }
+        if (full != null && mentionsDeath(full)) full = null          // a heavy song: they go on the title alone
+        val excerpt = full?.lines()?.map { it.trim() }?.filter { it.isNotEmpty() }?.joinToString(" / ")?.take(900)
+        return SongRead(t, full, excerpt)
+    }
+
+    /** The town's short name ("Yakima" from "Yakima, Washington"), for "Who hurt you, Yakima?". */
+    fun townName(): String = Config.city.split(",").firstOrNull()?.trim()?.ifEmpty { null } ?: Config.city
+
+    /** What the prompt says when they read the room. [which] is "the song that just played", "the song that's starting" and so on. */
+    fun readBlock(r: SongRead, which: String, duo: Boolean): String {
+        val town = townName()
+        val song = "\"${r.track.title}\" by ${r.track.artist}"
+        val who = if (duo) "One of them opens" else "Open"
+        val after = if (duo) "the other piles on or sticks up for them, then they move on" else "then move straight on"
+        var s = "\n- Read the room: the listener picked $which, $song. $who with ONE quick, playful jab about what that choice says about them, going by the title and what the song's about (a heartbreak song: \"Who hurt you, $town?\"; a revenge anthem: \"Remind me never to cross you\"; a love song: \"Somebody's got a crush\"; a hype song: \"Somebody's feeling dangerous today\"), in brand-new words; $after."
+        s += "\n- Keep the read light and affectionate, like a friend clocking your playlist: love life, mood, being in your feelings, main-character energy, harmless mischief. Never guess at anything heavy or personal (mental health, drinking or drugs, money trouble, bodies, anything sexual)."
+        if (!r.excerpt.isNullOrEmpty()) s += "\n- What the song's about, from its lyrics (only so you know; never quote, sing or closely paraphrase a line): ${r.excerpt}"
+        return s
+    }
+
+    /** True when a draft quotes the song: five words in a row from its lyrics (the title doesn't count). */
+    fun quotesLyrics(text: String, lyrics: String, title: String): Boolean {
+        val lw = words(lyrics)
+        val w = words(text)
+        if (lw.size < 5 || w.size < 5) return false
+        val grams = HashSet<String>()
+        for (i in 0..lw.size - 5) grams.add(lw.subList(i, i + 5).joinToString(" "))
+        val inTitle = " " + words(title).joinToString(" ") + " "
+        for (i in 0..w.size - 5) {
+            val g = w.subList(i, i + 5)
+            if (g.all { it in stopWords }) continue
+            val joined = g.joinToString(" ")
+            if (joined in grams && !inTitle.contains(" $joined ")) return true
+        }
+        return false
+    }
+
+    /** Whether this break reads the room: about 3 in 10, never two in a row. */
+    private fun timeToRead(): Boolean =
+        Math.random() < 0.3 && "read" !in Memory.last("openings", 2) && "read" !in Memory.last("popins", 1)
+
+    private fun readWhich(style: String, ctx: Ctx): String =
+        if (style == "intro") "the song that's starting" else if (ctx.last != null) "the song that just played" else "the song coming up next"
+
     /** Asks Gemini, checks the draft against her memory and rules, rewrites up to twice. */
-    private suspend fun freshDraft(prompt: String, skip: Set<String>, log: (String) -> Unit): Pair<String, List<String>>? {
+    private suspend fun freshDraft(prompt: String, skip: Set<String>, log: (String) -> Unit, read: SongRead? = null): Pair<String, List<String>>? {
         var feedback = ""
         var best: Pair<String, List<String>>? = null
         for (attempt in 0 until 3) {
@@ -228,6 +280,12 @@ object Brain {
             val raw = gemini(ask, Config.geminiKey, log) ?: break
             val (text, used) = cleanTags(tidy(raw), tags.toSet())
             if (text.isEmpty()) continue
+            val lyr = read?.lyrics
+            if (read != null && lyr != null && quotesLyrics(text, lyr, read.track.title)) {
+                log("[rewrite ${attempt + 1}: quoted the lyrics]")
+                feedback = "It quoted the song's lyrics. Never quote them: react to what the song's about in your own words."
+                continue
+            }
             val why = problem(text, Memory.recent, skip)
             if (why != null) {
                 log("[rewrite ${attempt + 1}: $why]")
@@ -559,8 +617,13 @@ object Brain {
         log("[segment: ${topic.name}] [mood: $mood] [${chattiness()}]")
         val fmt = formats.filter { it[0] !in Memory.last("formats", 8) }.ifEmpty { formats }.random()
         val haveSong = ctx.next != null || ctx.last != null
-        val opening = openings.filter { o -> o[0] !in Memory.last("openings", 8) && (o.getOrElse(2) { "" } != "song" || haveSong) && (o.getOrElse(2) { "" } != "last" || ctx.last != null) }
-            .ifEmpty { openings }.random()
+        // now and then she reads the room: one quick jab about what the listener's song says about them, then on with the break
+        val read = if (timeToRead()) songRead(if (style == "intro") ctx.next else (ctx.last ?: ctx.next)) else null
+        val opening = if (read != null) listOf("read", "Open by reading the room (see below).", "")
+            else openings.filter { o -> o[0] !in Memory.last("openings", 8) && (o.getOrElse(2) { "" } != "song" || haveSong) && (o.getOrElse(2) { "" } != "last" || ctx.last != null) }
+                .ifEmpty { openings }.random()
+        val roomLine = if (read != null) readBlock(read, readWhich(style, ctx), duo = false) else ""
+        if (read != null) log("[reading the room: ${read.track.title}${if (read.lyrics == null) ", title only" else ""}]")
         val ending = endings.filter { it !in Memory.last("endings", 5) }.ifEmpty { endings }.random()
         val tagChoices = tags.filter { it !in Memory.last("tags", 4) }.ifEmpty { tags }.shuffled().take(2)
         val (lo, hi) = wordRange(style)
@@ -582,7 +645,7 @@ object Brain {
             "THIS BREAK",
             "- What's happening: ${situations[style] ?: situations["talkover"]}$switchLine",
             "- Length: $lo to $hi words.",
-            "- Talk about: ${topic.facts}",
+            "- Talk about: ${topic.facts}$roomLine",
             "- Delivery: ${fmt[1]}",
             "- Mood: ${moodLines[mood] ?: moodLines["normal"]}",
             "- Opening: ${opening[1]}",
@@ -600,7 +663,7 @@ object Brain {
             "(She may name the next song if it looks like a real song. If it looks like an advert, a radio clip or is unknown, she doesn't mention it.)",
             "Write only the words Cara says.",
         ).joinToString("\n")
-        val d = freshDraft(prompt, skip, log)
+        val d = freshDraft(prompt, skip, log, read)
         if (d != null) {
             Memory.remember(d.first, segment = topic.label, fmt = fmt[0], opening = opening[0], ending = ending, tags = d.second)
             return d.first
@@ -638,8 +701,11 @@ object Brain {
             val tr = try { getTrivia(info) } catch (e: Exception) { null }
             if (tr != null && !mentionsDeath(tr.second)) fact = "A real fact you may use (never invent others): " + tr.second.take(400)
         }
-        val kinds = popinKinds.filter { k -> k[0] !in Memory.last("popins", 4) && (k[0] != "fact" || fact.isNotEmpty()) && (k[0] != "callback" || Memory.lastBreak != null) }
+        val kinds = popinKinds.filter { k -> k[0] !in Memory.last("popins", 4) && (k[0] != "fact" || fact.isNotEmpty()) && (k[0] != "callback" || Memory.lastBreak != null) &&
+            (k[0] != "read" || (info?.isMusic == true && "read" !in Memory.last("openings", 1))) }
         val kind = kinds.ifEmpty { popinKinds }.random()
+        val read = if (kind[0] == "read") songRead(info) else null
+        val roomLine = if (read != null) readBlock(read, "the song that's playing", duo = false) else ""
         val (lo, hi) = when (chattiness()) { "quick" -> Pair(8, 16); "normal" -> Pair(10, 22); else -> Pair(14, 30) }
         val tag = tags.filter { it !in Memory.last("tags", 4) }.ifEmpty { tags }.random()
         val skip = reusable(Ctx(null, info, station))
@@ -649,7 +715,7 @@ object Brain {
             persona,
             "",
             "The song $name started a few seconds ago, and she pops back in over it.",
-            "- What to do: ${kind[1]}",
+            "- What to do: ${kind[1]}$roomLine",
             "- Length: $lo to $hi words.",
             if (fact.isNotEmpty()) "- $fact" else null,
             if (kind[0] == "callback") "- Her last break was: \"${Memory.lastBreak ?: ""}\"" else null,
@@ -662,7 +728,7 @@ object Brain {
             rules,
             "Write only the words Cara says.",
         ).joinToString("\n")
-        val d = freshDraft(prompt, skip, log)
+        val d = freshDraft(prompt, skip, log, read)
         if (d != null) {
             Memory.remember(d.first, tags = d.second, popin = kind[0])
             return d.first
@@ -764,6 +830,10 @@ object Brain {
         val skip = reusable(ctx, words(coName).toSet() + setOf("london", "vinyl"))
         val songWords = words(listOfNotNull(ctx.last?.describe, ctx.next?.describe).joinToString(" ")).toSet()
         val coMove = Memory.fresh("coMoves", list("coMoves").ifEmpty { listOf("Rides Cara's chaos with big, booming energy, then lands one perfect comeback.") })
+        // now and then one of them reads the room: a quick jab about what the listener's song says about them, then on with it
+        val read = if (timeToRead()) songRead(if (style == "intro") ctx.next else (ctx.last ?: ctx.next)) else null
+        val roomLine = if (read != null) readBlock(read, readWhich(style, ctx), duo = true) else ""
+        if (read != null) log("[reading the room: ${read.track.title}${if (read.lyrics == null) ", title only" else ""}]")
         val switched = ctx.switchedFrom
         log("[duo: $lo-$hi lines, $first first]")
         val tagLine = if (isExpressive())
@@ -786,7 +856,7 @@ object Brain {
             "",
             "THIS BREAK",
             "- What's happening: ${duoSituations[style] ?: duoSituations["talkover"]}$switchLine",
-            "- Talk about: ${topic.facts}",
+            "- Talk about: ${topic.facts}$roomLine",
             "- $coShort's move this time (work it in naturally): $coMove",
             "- Shape: a quick back-and-forth between two DJs and old friends who've done a thousand shows together: teasing, interruptions, callbacks, each firing back at the other. Every line is short (3 to 22 words) and sounds spoken, not written.",
             "- Length: $lo to $hi lines and $most words at most in total. $first speaks first and they take turns.",
@@ -855,6 +925,12 @@ object Brain {
                 log("[rewrite ${attempt + 1}: not a conversation]")
                 continue
             }
+            val lyr = read?.lyrics
+            if (read != null && lyr != null && quotesLyrics(joined, lyr, read.track.title)) {
+                feedback = "It quoted the song's lyrics. Never quote them: react to what the song's about in your own words."
+                log("[rewrite ${attempt + 1}: quoted the lyrics]")
+                continue
+            }
             val why = problem(joined, Memory.recent, skip)
             if (why != null) {
                 log("[rewrite ${attempt + 1}: $why]")
@@ -862,12 +938,12 @@ object Brain {
                 if (best == null && !mentionsDeath(joined) && saysLabel(joined) == null) best = lines
                 continue
             }
-            Memory.remember(joined, segment = topic.label, ending = ending, tags = used)
+            Memory.remember(joined, segment = topic.label, opening = if (read != null) "read" else null, ending = ending, tags = used)
             return lines
         }
         val b = best
         if (b != null) {
-            Memory.remember(b.joinToString(" ") { it.second }, segment = topic.label, ending = ending)
+            Memory.remember(b.joinToString(" ") { it.second }, segment = topic.label, opening = if (read != null) "read" else null, ending = ending)
             return b
         }
         return emptyList()

@@ -50,6 +50,23 @@ object Lyrics {
         }
     }
 
+    private val words = mutableMapOf<String, String>()          // "title|artist" -> lyrics ("" when there are none)
+
+    /** A song's lyrics as plain text, so the DJs can tell what it's about when they read the room.
+     *  Never shown, read out or quoted on air. Looked up once per song. */
+    suspend fun text(track: Track): String? {
+        if (!track.isMusic) return null
+        val key = track.title + "|" + track.artist
+        synchronized(words) { words[key] }?.let { return it.ifEmpty { null } }
+        val r = find(track, track.durationMs)
+        val out = r.plain.ifEmpty { r.lines.map { it.text }.filter { it.isNotEmpty() }.joinToString("\n") }
+        synchronized(words) {
+            if (words.size > 200) words.clear()
+            words[key] = out
+        }
+        return out.ifEmpty { null }
+    }
+
     /** Turns "[01:23.45] some words" lines into timed lines. */
     fun parse(lrc: String): List<LyricLine> {
         val out = mutableListOf<LyricLine>()
