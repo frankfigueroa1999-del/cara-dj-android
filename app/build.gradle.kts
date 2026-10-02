@@ -12,7 +12,7 @@ android {
         applicationId = "com.cara.dj"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
+        versionCode = 3
         versionName = "2.0"
     }
 

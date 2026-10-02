@@ -551,7 +551,7 @@ fun AddToPlaylistSheet(track: Track, onDismiss: () -> Unit) {
                     Text("New Playlist…", color = Color.White, fontSize = 16.sp)
                 }
             }
-            items(Library.editablePlaylists, key = { it.id }) { p ->
+            items(Library.editablePlaylists) { p ->
                 Row(
                     Modifier.fillMaxWidth().tap(enabled = !working) { add(p) }.padding(horizontal = 20.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
