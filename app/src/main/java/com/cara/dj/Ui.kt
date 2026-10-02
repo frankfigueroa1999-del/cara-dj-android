@@ -351,6 +351,9 @@ private fun MainScreen(art: Bitmap?, onSettings: () -> Unit) {
             // song name + artist, the DJ on/off button and the "..." button that opens every DJ option
             Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.weight(1f)) {
+                    // the station takes the name of whatever's playing (blank on plain Non Stop Pop)
+                    if (Station.shown.isNotEmpty())
+                        Text(Station.shown.uppercase(), color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.5.sp, maxLines = 1, style = shadowed, modifier = Modifier.padding(bottom = 3.dp))
                     Text(track?.title ?: (if (Engine.connected) "Nothing playing" else "Not connected"), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2, style = shadowed)
                     Text(track?.artist ?: "Start a playlist in the Spotify app.", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp, maxLines = 1, style = shadowed)
                 }
@@ -576,6 +579,29 @@ private fun MainScreen(art: Bitmap?, onSettings: () -> Unit) {
                 }
                 Stepper("Stinger chance: ${Config.stingerChance}% of silent breaks", Config.stingerChance, 0, 100, 5) { Config.stingerChance = it }
 
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Label("HOW MUCH SHE SAYS")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for ((tag, name) in listOf("quick" to "QUICK", "normal" to "NORMAL", "chatty" to "CHATTY"))
+                            Pill(name, Modifier.weight(1f), selected = Config.chattiness == tag) { Config.chattiness = tag }
+                    }
+                    Text(
+                        when (Config.chattiness) {
+                            "quick" -> "Short drop-ins, in and out."
+                            "normal" -> "A few lines each time."
+                            else -> "Proper segments: stories, games, news and nonsense. Silent breaks are her longest."
+                        },
+                        color = GRAY, fontSize = 12.sp,
+                    )
+                }
+
+                // MC Scratch, her co-host
+                Pill(if (Config.coHost) "MC SCRATCH JOINS: ON" else "MC SCRATCH JOINS: OFF", Modifier.fillMaxWidth(), selected = Config.coHost) { Config.coHost = !Config.coHost }
+                if (Config.coHost) {
+                    Stepper("Together: ${Config.coHostChance}% of breaks", Config.coHostChance, 10, 100, 10) { Config.coHostChance = it }
+                    Text("Scratch, Cara's West Coast co-host, joins this share of her breaks for a back-and-forth. His voice is in Settings.", color = GRAY, fontSize = 12.sp)
+                }
+
                 Pill(if (Config.popinEnabled) "CARA POPS BACK IN: ON" else "CARA POPS BACK IN: OFF", Modifier.fillMaxWidth(), selected = Config.popinEnabled) { Config.popinEnabled = !Config.popinEnabled }
                 Stepper("Pop-in chance: ${Config.popinChance}% of talk-over / intro breaks", Config.popinChance, 0, 100, 5) { Config.popinChance = it }
                 Stepper("Pop-in about ${Config.popinSeconds} seconds into the song (a random 5 either way)", Config.popinSeconds, 5, 120, 5) { Config.popinSeconds = it }
@@ -603,6 +629,9 @@ private fun MainScreen(art: Bitmap?, onSettings: () -> Unit) {
 
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Pill("TEST DJ NOW", Modifier.weight(1f)) { Engine.testBreak() }
+                    Pill("WITH SCRATCH", Modifier.weight(1f)) { Engine.testDuo() }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Pill("TEST STINGER", Modifier.weight(1f)) { scope.launch { Engine.testStinger() } }
                     Pill("TEST POP-IN", Modifier.weight(1f)) { Engine.testPopin() }
                 }
@@ -716,7 +745,11 @@ private fun SettingsScreen(onDone: () -> Unit) {
         Label("SPOTIFY")
         OutlinedTextField(value = Config.clientID, onValueChange = { Config.clientID = it.trim() }, label = { Text("Client ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Text("In your Spotify app settings, add this Redirect URI:  caradj://callback", color = GRAY, fontSize = 12.sp)
-        if (Spotify.isLoggedIn) Pill("LOG OUT OF SPOTIFY", Modifier.fillMaxWidth()) { Spotify.logout(); Engine.connected = false }
+        if (Spotify.isLoggedIn) {
+            if (!Spotify.hasAllScopes)
+                Text("Log out and connect again once, so the station can take your playlist's name and Cara can tease your top artists.", color = Color(0xFFFFC46B), fontSize = 12.sp)
+            Pill("LOG OUT OF SPOTIFY", Modifier.fillMaxWidth()) { Spotify.logout(); Engine.connected = false }
+        }
         else Pill("CONNECT SPOTIFY", Modifier.fillMaxWidth()) { onDone(); scope.launch { Engine.connect() } }
 
         Label("ELEVENLABS (YOUR VOICE)")
@@ -730,7 +763,11 @@ private fun SettingsScreen(onDone: () -> Unit) {
         Pill("ELEVEN V4 TURBO (FASTER)", Modifier.fillMaxWidth(), selected = Config.elevenModel == "eleven_v4_turbo") { Config.elevenModel = "eleven_v4_turbo" }
         Pill("MULTILINGUAL V2 (OLDER)", Modifier.fillMaxWidth(), selected = Config.elevenModel == "eleven_multilingual_v2") { Config.elevenModel = "eleven_multilingual_v2" }
 
-        Label("GEMINI (WRITES HER LINES)")
+        Label("SCRATCH'S VOICE (CO-HOST, OPTIONAL)")
+        OutlinedTextField(value = Config.coVoice, onValueChange = { Config.coVoice = it.trim() }, label = { Text("Voice ID (blank for the default)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Text("MC Scratch, Cara's co-host. Add any voice from the ElevenLabs Voice Library to My Voices and paste its ID here, or leave it blank for a deep radio voice.", color = GRAY, fontSize = 12.sp)
+
+        Label("GEMINI (WRITES THEIR LINES)")
         OutlinedTextField(
             value = Config.geminiKey, onValueChange = { Config.geminiKey = it.trim() }, label = { Text("API key") },
             singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),

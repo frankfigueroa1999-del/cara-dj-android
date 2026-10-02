@@ -12,9 +12,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 data class Prepared(val file: File, val style: String, val forUri: String, val pauseMs: Int, val talkMs: Int, val introAtMs: Int)
@@ -44,7 +46,9 @@ object Engine {
     private var prepared: Prepared? = null
     private var building = false
     private var forceBreak = false
+    private var forceDuo = false
     private var lastSting = -1
+    private var scopeHinted = false
 
     // pop-in: a quick second drop-in a few seconds into the song after a talk-over / intro break
     private var popinArmed = false
@@ -60,6 +64,33 @@ object Engine {
         inited = true
         app = ctx.applicationContext
         audio = DJAudio(app)
+        loadBrain()
+    }
+
+    /** Cara's brain (what she talks about, her memory, Scratch) ships inside the app. */
+    private fun loadBrain(): Boolean {
+        if (Brain.isReady) return true
+        return try {
+            Brain.init(app)
+            true
+        } catch (e: Exception) {
+            addLog("Couldn't load Cara's brain: ${e.message}")
+            false
+        }
+    }
+
+    /** Once: an older Spotify login can't read playlist names or your top artists, so ask for a fresh one. */
+    fun scopeHint() {
+        if (scopeHinted || !Spotify.isLoggedIn || Spotify.hasAllScopes) return
+        scopeHinted = true
+        addLog("One-time thing: open Settings, log out of Spotify and connect again. Then the station takes your playlist's name and Cara can tease your top artists.")
+    }
+
+    /** A fresh look at what Spotify is playing (and the station is named after where it's playing from). */
+    private fun took(p: Playback) {
+        now = p
+        connected = true
+        Station.update(p.contextUri)
     }
 
     // ---------- logging ----------
@@ -78,7 +109,7 @@ object Engine {
                 return
             }
             val p = Spotify.poll()
-            if (p != null) { now = p; connected = true; addLog("Connected to Spotify.") }
+            if (p != null) { took(p); addLog("Connected to Spotify."); scopeHint() }
             else {
                 connected = false
                 when (Spotify.lastStatus) {
@@ -118,7 +149,7 @@ object Engine {
             while (true) {
                 if (!running && Spotify.isLoggedIn) {
                     val p = Spotify.poll()
-                    if (p != null) { now = p; connected = true }
+                    if (p != null) took(p)
                 }
                 delay(12000)
             }
@@ -173,6 +204,13 @@ object Engine {
         forceBreak = true
     }
 
+    /** Cara and Scratch, right now. */
+    fun testDuo() {
+        if (!running || !now.isPlaying) { addLog("Start the DJ and play a song first."); return }
+        forceDuo = true
+        forceBreak = true
+    }
+
     fun testPopin() {
         if (!running || !now.isPlaying) { addLog("Start the DJ and play a song first."); return }
         popinTestNow = true
@@ -200,14 +238,13 @@ object Engine {
     private suspend fun tick() {
         if (busy) return
         val remainingEst = now.remainingMs
-        val near = remainingEst != Int.MAX_VALUE && (remainingEst < 12000 || prepared?.style == "intro")
+        val near = remainingEst != Int.MAX_VALUE && (remainingEst < maxOf(12000, (prepared?.talkMs ?: 0) + 4000) || prepared?.style == "intro")
         val interval = if (near) 1200L else 6000L
         if (System.currentTimeMillis() - lastPoll >= interval) {
             lastPoll = System.currentTimeMillis()
             val p = Spotify.poll()
             if (p != null) {
-                now = p
-                connected = true
+                took(p)
                 if (p.hasItem && p.uri != lastUri) {
                     lastUri = p.uri
                     songsSince += 1
@@ -238,8 +275,10 @@ object Engine {
 
         if (forceBreak && !building) {
             forceBreak = false
-            addLog("Testing a DJ break...")
-            buildBreak("intro", now.uri, immediate = true)
+            val duo = forceDuo
+            forceDuo = false
+            addLog(if (duo) "Testing Cara and ${Brain.coShort}..." else "Testing a DJ break...")
+            buildBreak("intro", now.uri, immediate = true, duo = duo)
             return
         }
 
@@ -268,14 +307,18 @@ object Engine {
         if (due && prepared == null && !building && System.currentTimeMillis() >= buildRetryAt && (remaining < 150000 || forced != null)) {
             val style = forced ?: pickStyle()
             val uri = now.uri
-            scope.launch { buildBreak(style, uri, immediate = false) }
+            // Scratch can join any kind of break. Their talk-overs finish as the song ends and their intros are a quick
+            // two-liner, so a song that starts straight away isn't buried under their chat.
+            val duo = Config.coHost && randInt(0, 99) < Config.coHostChance
+            building = true
+            scope.launch { buildBreak(style, uri, immediate = false, duo = duo) }
         }
 
         val p = prepared
         if (due && p != null) {
             val go = when (p.style) {
                 "silent" -> if (now.uri == p.forUri) remaining <= p.pauseMs else progress >= 1200
-                // if the clip finished after its song ended, talk over the start of the next song instead of losing the break
+                // if the clip was ready after its song ended: pause the next song, talk, then play it from the top
                 "talkover" -> if (now.uri == p.forUri) remaining <= p.talkMs else progress >= 1200
                 else -> now.uri != p.forUri && progress >= p.introAtMs
             }
@@ -286,7 +329,7 @@ object Engine {
                 lastStyle = p.style
                 queued = null
                 nextAfter = rollInterval()
-                addLog(if (late) "[transition: talkover (late, over the start of this song)]" else "[transition: ${p.style}]")
+                addLog(if (late) "[transition: ${p.style} (late, so this song waits for her and starts again)]" else "[transition: ${p.style}]")
                 if (Config.popinEnabled && (p.style != "silent" || late)) {
                     if (Config.popinTest || randInt(0, 99) < Config.popinChance) {
                         if (late || p.style == "intro") {               // already inside the new song
@@ -314,37 +357,73 @@ object Engine {
         return weightedPick(all.map { it to (w[it] ?: 1) })
     }
 
-    private suspend fun buildBreak(style: String, forUri: String, immediate: Boolean) {
+    private suspend fun buildBreak(style: String, forUri: String, immediate: Boolean, duo: Boolean = false) {
         building = true
         try {
+            if (!loadBrain()) { buildRetryAt = System.currentTimeMillis() + 60000; return }
             val ctx = Ctx(now.track, Spotify.nextTrack())
-            val topic = pickTopic(ctx)
-            val mood = currentMood()
-            addLog("[topic: ${topic.label}] [mood: $mood]")
-            val text = writeBreak(style, topic, ctx, mood, logger)
+            // sometimes it's Cara and Scratch together (rolled when the break was planned)
+            if (duo && buildDuo(style, ctx, forUri, immediate)) return
+            val text = Brain.writeBreak(style, ctx, logger)
             addLog("[DJ:$style] $text")
             line = text
             try {
                 val data = elevenLabsTTS(text)
                 val file = File(app.cacheDir, "dj_${System.currentTimeMillis()}_${randInt(0, 999)}.mp3")
                 file.writeBytes(data)
-                val ms = DJAudio.duration(file)
-                val p = Prepared(
-                    file, style, forUri,
-                    pauseMs = randInt(700, 1100),
-                    talkMs = maxOf(4000, minOf(12000, ms - randInt(2000, 4500))),
-                    introAtMs = randInt(500, 2500),
-                )
-                if (immediate) { busy = true; perform(p) } else prepared = p
+                ready(file, style, forUri, immediate)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 addLog("Could not make her voice: ${e.message}. Trying again in a few seconds.")
                 buildRetryAt = System.currentTimeMillis() + 20000
                 if (queued != null) queued = null
             }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            addLog("Couldn't write the break: ${e.message}. Trying again in a few seconds.")
+            buildRetryAt = System.currentTimeMillis() + 20000
         } finally {
             building = false
         }
+    }
+
+    /** Cara and Scratch together: writes their exchange, voices each line in its own voice and joins it into one clip.
+     *  Returns false if it couldn't, and Cara takes the break solo instead. */
+    private suspend fun buildDuo(style: String, ctx: Ctx, forUri: String, immediate: Boolean): Boolean {
+        val co = Brain.coShort
+        if (Config.geminiKey.isEmpty()) {
+            addLog("[$co needs a Gemini key to write his lines, so Cara takes it solo]")
+            return false
+        }
+        val script = Brain.writeDuo(style, ctx, logger)
+        if (script.size < 2) {
+            addLog("[$co couldn't make it this time, so Cara takes it solo]")
+            return false
+        }
+        val shown = script.joinToString("\n") { (who, text) -> (if (who == "CARA") "Cara" else co) + ": " + text }
+        addLog("[DUO:$style]\n$shown")
+        val file = try {
+            Duo.render(script, app.cacheDir)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            addLog("Could not make their voices: ${e.message}. Cara takes it solo.")
+            return false
+        }
+        line = shown
+        ready(file, style, forUri, immediate)
+        return true
+    }
+
+    /** The clip is made: work out when it goes (talk-overs end with the song, intros come in quick), then play it or hold it. */
+    private suspend fun ready(file: File, style: String, forUri: String, immediate: Boolean) {
+        val ms = if (file.name.endsWith(".wav")) Duo.wavMs(file) else DJAudio.duration(file)
+        val p = Prepared(
+            file, style, forUri,
+            pauseMs = randInt(700, 1100),
+            talkMs = maxOf(4000, minOf(25000, ms - randInt(400, 1500))),
+            introAtMs = randInt(400, 1500),
+        )
+        if (immediate) { busy = true; perform(p) } else prepared = p
     }
 
     // ---------- doing the transition ----------
@@ -352,24 +431,43 @@ object Engine {
         busy = true
         try {
             val voiceVol = Config.djVolume / 100f
-            when (p.style) {
-                "silent" -> if (!late) {
+            if (late) {
+                // she missed the end of the last song: pause this one, talk, then play it from the top so its start isn't buried
+                val device = now.deviceID
+                Spotify.pause()
+                try {
+                    audio.speak(listOf(Clip(file = p.file, volume = voiceVol)))
+                } finally {
+                    withContext(NonCancellable) {
+                        delay(200)
+                        Spotify.seek(0)
+                        delay(300)
+                        resumeMusic(device)
+                    }
+                }
+            } else when (p.style) {
+                "silent" -> {
                     val device = now.deviceID
                     val uri = now.uri
                     Spotify.pause()
-                    val items = mutableListOf<Clip>()
-                    val s = pickStinger()
-                    if (randInt(0, 99) < Config.stingerChance && s != null) {
-                        addLog("[stinger before Cara]")
-                        items.add(Clip(asset = s, volume = Config.stingerVolume / 100f))
+                    try {
+                        val items = mutableListOf<Clip>()
+                        val s = pickStinger()
+                        if (randInt(0, 99) < Config.stingerChance && s != null) {
+                            addLog("[stinger before Cara]")
+                            items.add(Clip(asset = s, volume = Config.stingerVolume / 100f))
+                        }
+                        items.add(Clip(file = p.file, volume = voiceVol))
+                        audio.speak(items)
+                    } finally {
+                        withContext(NonCancellable) {
+                            delay(200)
+                            val cur = Spotify.poll()
+                            if (cur != null && cur.uri == uri) { Spotify.skipNext(); delay(300) }
+                            resumeMusic(device)
+                        }
                     }
-                    items.add(Clip(file = p.file, volume = voiceVol))
-                    audio.speak(items)
-                    delay(200)
-                    val cur = Spotify.poll()
-                    if (cur != null && cur.uri == uri) { Spotify.skipNext(); delay(300) }
-                    resumeMusic(device)
-                } else audio.speak(listOf(Clip(file = p.file, volume = voiceVol)))
+                }
                 else -> audio.speak(listOf(Clip(file = p.file, volume = voiceVol)))   // Android turns the Spotify app down while she talks
             }
         } finally {
@@ -394,7 +492,8 @@ object Engine {
     private suspend fun buildPopin(t: Track?, uri: String) {
         popinBuilding = true
         try {
-            val text = writePopIn(t, logger)
+            if (!loadBrain()) throw Exception("her brain didn't load")
+            val text = Brain.writePopin(t, logger)
             addLog("[POP-IN] $text")
             val data = elevenLabsTTS(text)
             val file = File(app.cacheDir, "popin_${System.currentTimeMillis()}_${randInt(0, 999)}.mp3")
@@ -454,7 +553,7 @@ object Engine {
         if (now.isPlaying) Spotify.pause() else resumeMusic(now.deviceID)
         lastPoll = 0L
         delay(300)
-        Spotify.poll()?.let { now = it }
+        Spotify.poll()?.let { took(it) }
     }
     suspend fun toggleShuffle() {
         val on = !now.shuffle

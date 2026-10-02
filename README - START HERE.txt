@@ -1,8 +1,15 @@
 CARA DJ FOR ANDROID
 ===================
-Same Cara as the PC and iPhone apps: Eleven v4 voice, stingers, moods, trivia,
+Same Cara as the PC and iPhone apps: the same brain (43 segments, her memory so
+she never repeats herself, how much she says), MC Scratch as her co-host, the
+station named after whatever you're playing, Eleven v4 voice, stingers, moods,
 queue buttons, sliders. Android can really turn Spotify down while she talks
 (and it keeps running with the screen off).
+
+QUICKEST WAY TO GET IT
+----------------------
+On your phone, open the repo on GitHub > Releases > "Cara DJ for Android" >
+CaraDJ.apk. Every push to main rebuilds it there (about 5 minutes).
 
 GET THE APP (GitHub builds it for you, about 5 minutes)
 -------------------------------------------------------
@@ -17,12 +24,12 @@ GET THE APP (GitHub builds it for you, about 5 minutes)
    b) name:  .gitignore   (optional) paste in the .gitignore contents.
 4. Click the "Actions" tab. The build starts by itself. Wait for the green check.
    If you don't see it: Actions > "Build Cara DJ (Android)" > Run workflow.
-5. Click the finished run, scroll to "Artifacts", download "CaraDJ-apk".
-   Unzip it: inside is app-debug.apk.
+5. When it's green, the APK is under Releases > "Cara DJ for Android" >
+   CaraDJ.apk. (It's also under the run's "Artifacts" as a zip.)
 
 INSTALL
 -------
-1. Get app-debug.apk onto your phone (email it, Google Drive, or USB).
+1. Get CaraDJ.apk onto your phone (download it there, email it, or USB).
 2. Tap it. If Android asks, allow "Install unknown apps" for the app you opened
    it from (Chrome / Files / Drive), then tap Install. If Play Protect warns,
    choose "Install anyway" (it's your own app).
@@ -41,6 +48,9 @@ FIRST RUN
 4. Android Settings > Apps > Cara DJ > Battery > Unrestricted. Important, or
    some phones (Samsung especially) freeze it after a few minutes.
 5. Start a playlist in the Spotify app, come back, tap START DJ.
+6. Updating from the first version? Settings > LOG OUT OF SPOTIFY, then
+   CONNECT SPOTIFY once more. The new login lets the station take your
+   playlist's name and lets Cara tease your top artists.
 
 NOTES
 -----
@@ -49,5 +59,11 @@ NOTES
   If Spotify pauses instead of ducking on your phone, tell me.
 - Silent breaks work like on the PC: pause, stinger, Cara, then resume.
 - Spotify needs Premium for the pause/skip/resume controls.
-- To change Cara's words or feeds, edit Content.kt on GitHub (pencil icon),
-  commit, and download the new APK from Actions.
+- MC Scratch joins some breaks (DJ OPTIONS > MC SCRATCH JOINS, and how often).
+  He needs the Gemini key. His voice: Settings > SCRATCH'S VOICE (blank = default).
+  WITH SCRATCH in DJ OPTIONS tests the two of them right away.
+- HOW MUCH SHE SAYS (Quick / Normal / Chatty) sets how long her breaks are.
+- Her lists (segments, stories, quiz, Scratch's name and personality) live in
+  app/src/main/assets/brain_data.json, the same file the PC app uses. Her rules
+  and prompts are in Brain.kt. Edit on GitHub (pencil icon), commit, and the new
+  APK shows up under Releases.

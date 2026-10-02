@@ -26,6 +26,7 @@ data class Playback(
     val deviceName: String = "",
     val shuffle: Boolean = false,
     val repeat: String = "off",
+    val contextUri: String = "",          // the playlist / album / artist it's playing from (the station is named after it)
 ) {
     /** Milliseconds left in the song, estimated from the last check. */
     val remainingMs: Int
@@ -43,9 +44,16 @@ data class Playback(
 
 object Spotify {
     const val REDIRECT = "caradj://callback"
-    private const val SCOPES = "user-read-playback-state user-modify-playback-state"
+    private const val SCOPES = "user-read-playback-state user-modify-playback-state playlist-read-private user-top-read"
 
     val isLoggedIn: Boolean get() = Config.refreshToken.isNotEmpty()
+
+    /** True once the login includes everything the app asks for (playlist names for the station, your top artists). */
+    val hasAllScopes: Boolean
+        get() {
+            val granted = Config.grantedScopes.split(" ").filter { it.isNotEmpty() }.toSet()
+            return SCOPES.split(" ").all { it in granted }
+        }
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
@@ -90,11 +98,13 @@ object Spotify {
         Config.accessToken = access
         val r = j?.optString("refresh_token", "") ?: ""
         if (r.isNotEmpty()) Config.refreshToken = r
+        val sc = j?.optString("scope", "") ?: ""
+        if (sc.isNotEmpty()) Config.grantedScopes = sc
         Config.tokenExpiry = System.currentTimeMillis() / 1000.0 + j!!.optDouble("expires_in", 3600.0) - 60
     }
 
     fun logout() {
-        Config.accessToken = ""; Config.refreshToken = ""; Config.tokenExpiry = 0.0
+        Config.accessToken = ""; Config.refreshToken = ""; Config.tokenExpiry = 0.0; Config.grantedScopes = ""
     }
 
     private suspend fun validToken(): String {
@@ -159,6 +169,7 @@ object Spotify {
             deviceName = j.optJSONObject("device")?.optString("name", "") ?: "",
             shuffle = j.optBoolean("shuffle_state", false),
             repeat = j.optString("repeat_state", "off"),
+            contextUri = j.optJSONObject("context")?.optString("uri", "") ?: "",
         )
     }
 

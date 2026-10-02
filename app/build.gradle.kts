@@ -12,8 +12,8 @@ android {
         applicationId = "com.cara.dj"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
     }
 
     // A fixed signing key, so every new build installs right over the old one (settings are kept).

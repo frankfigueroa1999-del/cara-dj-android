@@ -71,9 +71,18 @@ object Config {
     var popinSeconds: Int by SP("popinSeconds", 15)
     var popinTest: Boolean by SP("popinTest", false)
 
+    /** How long she talks: "quick", "normal" or "chatty". */
+    var chattiness: String by SP("chattiness", "chatty")
+
+    // MC Scratch, her co-host
+    var coHost: Boolean by SP("coHost", true)
+    var coHostChance: Int by SP("coHostChance", 40)
+    var coVoice: String by SP("coVoice", "")          // empty = his default voice
+
     // Spotify login (saved so you only log in once)
     var accessToken: String by SP("accessToken", "")
     var refreshToken: String by SP("refreshToken", "")
     var tokenExpiry: Double by SP("tokenExpiry", 0.0)
     var verifier: String by SP("verifier", "")
+    var grantedScopes: String by SP("grantedScopes", "")
 }
