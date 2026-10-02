@@ -98,6 +98,8 @@ object Config {
     // MC Scratch, her co-host
     var coHost: Boolean by SP("coHost", true)
     var coHostChance: Int by SP("coHostChance", 40)
+    /** Scratch curses (where it lands). Off keeps him clean. */
+    var coHostSwears: Boolean by SP("coHostSwears", true)
     var coVoice: String by SP("coVoice", "")          // empty = his default voice
 
     // Spotify login (saved so you only log in once)

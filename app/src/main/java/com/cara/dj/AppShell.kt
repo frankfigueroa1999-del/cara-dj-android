@@ -185,7 +185,7 @@ fun BottomChrome(modifier: Modifier = Modifier) {
                 .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0f), Color.Black.copy(alpha = 0.5f))))
         )
         Column(
-            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = bottom + 2.dp),
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = bottom + 2.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             AnimatedVisibility(

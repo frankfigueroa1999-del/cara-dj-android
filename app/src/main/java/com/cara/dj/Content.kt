@@ -259,20 +259,29 @@ fun timeOfDayWord(): String {
 suspend fun gemini(prompt: String, key: String, log: (String) -> Unit): String? {
     if (key.isEmpty()) return null
     for (model in listOf("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash")) {
-        val body = JSONObject().put(
-            "contents",
-            JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))),
-        ).toString().toByteArray()
+        // on-air banter (Scratch's shade, a roast battle) can read like harassment to the filter; only block the clear cases
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+            .put("safetySettings", JSONArray().put(JSONObject().put("category", "HARM_CATEGORY_HARASSMENT").put("threshold", "BLOCK_ONLY_HIGH")))
+            .toString().toByteArray()
         val (status, data) = fetchBytes(
             "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent", 25000, "POST",
             mapOf("x-goog-api-key" to key, "Content-Type" to "application/json"), body,
         )
         if (status != 200) { log("Gemini $model failed: $status"); continue }
         try {
-            val text = JSONObject(String(data)).getJSONArray("candidates").getJSONObject(0)
-                .getJSONObject("content").getJSONArray("parts").getJSONObject(0).optString("text", "").trim()
-            val clean = tidy(text)
-            if (clean.isNotEmpty()) return clean
+            val j = JSONObject(String(data))
+            val c = j.optJSONArray("candidates")?.optJSONObject(0)
+            val text = c?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text", "")?.trim() ?: ""
+            if (text.isNotEmpty()) {
+                val clean = tidy(text)
+                if (clean.isNotEmpty()) return clean
+                continue
+            }
+            // nothing came back: say why, so a held-back draft shows up in Activity
+            val why = c?.optString("finishReason", "")?.ifEmpty { null }
+                ?: j.optJSONObject("promptFeedback")?.optString("blockReason", "")?.ifEmpty { null } ?: "empty reply"
+            log("Gemini $model wrote nothing ($why)")
         } catch (e: Exception) { log("Gemini $model gave an unreadable answer.") }
     }
     return null

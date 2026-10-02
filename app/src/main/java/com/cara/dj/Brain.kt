@@ -57,6 +57,8 @@ object Brain {
     var coIdentity = ""
     var whoIsWho = ""
     var coDefaultVoice = "nPczCjzI2devNBz1zQrb"
+    private var coLanguageOn = ""
+    private var coLanguageOff = ""
     private var ready = false
     val isReady: Boolean get() = ready
 
@@ -109,6 +111,8 @@ object Brain {
         coIdentity = d.optString("coIdentity", "")
         whoIsWho = d.optString("whoIsWho", "")
         coDefaultVoice = d.optString("coDefaultVoice", coDefaultVoice)
+        coLanguageOn = d.optString("coLanguageOn", "")
+        coLanguageOff = d.optString("coLanguageOff", "HIS LANGUAGE: clean, no swearing. Cara never swears either.")
         stopWords = list("stopWords").toSet()
         Memory.load(File(ctx.filesDir, "cara-memory.json"))
         ready = true
@@ -141,6 +145,23 @@ object Brain {
     }
 
     /** "Slogan" and friends only show up when she reads out what she was asked to do. */
+    /** How Scratch talks: gritty when his cursing is on (the default), clean when it's off (Cara's page, Co-Host). */
+    fun coLanguage(): String = if (Config.coHostSwears && coLanguageOn.isNotEmpty()) coLanguageOn else coLanguageOff
+
+    private val strongSwears = setOf("ass", "asses", "asshole", "assholes", "bitch", "bitches", "bastard", "bastards",
+        "piss", "pissed", "damn", "damned", "dammit", "goddamn", "goddammit")
+
+    /** The curse words in a line (to keep Cara clean, and Scratch too when his cursing is off). */
+    fun swears(text: String): List<String> = words(text).map { it.trim('\'') }.filter {
+        it.startsWith("fuck") || it.startsWith("motherfuck") || it.startsWith("shit") || it.startsWith("bullshit") || it in strongSwears
+    }
+
+    /** Words he doesn't use even with his cursing on: classy, not crude. */
+    fun tooFar(text: String): Boolean = swears(text).any { it.startsWith("bitch") || it.startsWith("motherfuck") }
+
+    /** A curse hidden behind asterisks ("sh*t") gets read out as nonsense. */
+    private val masked = Regex("""[A-Za-z]\*+[A-Za-z]|\b[A-Za-z]\*{2,}""")
+
     fun saysLabel(text: String): String? = words(text).firstOrNull { it in setOf("slogan", "slogans", "tagline", "taglines") }
 
     /** Why a draft can't be used (null when it's fine). */
@@ -757,6 +778,7 @@ object Brain {
             "CARA: $persona",
             bible(ctx),
             "$up: $coPersona",
+            coLanguage(),
             coBible,
             coIdentity,
             stationLine(ctx),
@@ -789,6 +811,12 @@ object Brain {
         var best: List<Pair<String, String>>? = null
         for (attempt in 0 until 3) {
             val raw = gemini(if (feedback.isEmpty()) prompt else "$prompt\n\nYour previous draft can't be used: $feedback Write a completely new one.", Config.geminiKey, log) ?: break
+            // a masked curse ("sh*t") gets read out as nonsense, so he says it in full or not at all
+            if (masked.containsMatchIn(raw)) {
+                feedback = "It hid a word behind asterisks. Write every word out in full, or pick a different word."
+                log("[rewrite ${attempt + 1}: masked word]")
+                continue
+            }
             val lines = mutableListOf<Pair<String, String>>()
             val used = mutableListOf<String>()
             for ((who, text) in parseDuo(raw)) {
@@ -805,6 +833,21 @@ object Brain {
             if ("alex" in said && "alex" !in songWords) {
                 feedback = "It called him Alex. His name is $coName, $coShort for short."
                 log("[rewrite ${attempt + 1}: wrong name]")
+                continue
+            }
+            if (lines.any { it.first == "CARA" && swears(it.second).isNotEmpty() }) {
+                feedback = "Cara swore. Only $coShort curses; Cara keeps it clean."
+                log("[rewrite ${attempt + 1}: Cara swore]")
+                continue
+            }
+            if (!Config.coHostSwears && swears(joined).isNotEmpty()) {
+                feedback = "Keep it clean this time: no swearing from either of them."
+                log("[rewrite ${attempt + 1}: swearing]")
+                continue
+            }
+            if (tooFar(joined)) {
+                feedback = "$coShort went too far. He can curse where it lands, but keep it classy: never \"bitch\" or \"motherfucker\"."
+                log("[rewrite ${attempt + 1}: too crude]")
                 continue
             }
             if (lines.size < 2 || lines.none { it.first == up } || lines.none { it.first == "CARA" }) {

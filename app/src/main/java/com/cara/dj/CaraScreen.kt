@@ -122,7 +122,8 @@ fun CaraScreen() {
             Gap()
             TitledCard(
                 "Co-Host",
-                if (Config.coHost) "MC Scratch, Cara's West Coast co-host, joins this share of her breaks for a back-and-forth. His voice is in Settings."
+                if (Config.coHost) "MC Scratch, Cara's West Coast co-host, joins this share of her breaks for a back-and-forth. His voice is in Settings." +
+                    (if (Config.coHostSwears) " He curses when it lands; Cara keeps it clean." else " He keeps it clean.")
                 else "Turn on MC Scratch, Cara's West Coast co-host, for back-and-forth breaks.",
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -130,6 +131,8 @@ fun CaraScreen() {
                     if (Config.coHost) {
                         Hairline()
                         StepperRow("Together", "${Config.coHostChance}% of breaks", Config.coHostChance, 10..100, 10) { Config.coHostChance = it }
+                        Hairline()
+                        ToggleRow("Scratch Can Curse", Config.coHostSwears) { Config.coHostSwears = it }
                     }
                 }
             }

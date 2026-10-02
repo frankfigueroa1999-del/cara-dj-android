@@ -87,7 +87,7 @@ object Theme {
     /** The player's green (shuffle on, the device you're playing on). */
     val green = Color(0.37f, 0.82f, 0.43f)
     /** The frosted fill of the floating bars and sheets (Android can't blur what's behind them, so it's a dark glass). */
-    val frost = Color(0xE81C1C22)
+    val frost = Color(0xF41C1C22)          // dense enough that songs scrolling underneath stay unreadable (there is no blur behind it on Android)
     val hPad = 20.dp
     /** The floating tab bar and mini player. */
     val tabBarHeight = 62.dp
